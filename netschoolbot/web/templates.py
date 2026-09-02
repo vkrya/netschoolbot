@@ -101,7 +101,7 @@ MAIN_HTML = """<!DOCTYPE html>
   .service-controls { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr));
                       gap: 6px; width: 100%; flex: 1 0 100%; }
   .service-controls button { width: 100%; min-width: 0; white-space: nowrap; }
-  #term-arsbb, #term-netschoolbot, #term-custom { flex: 1; padding: 4px; overflow: hidden; }
+  #term-netschoolbot, #term-nginx, #term-custom { flex: 1; padding: 4px; overflow: hidden; }
 
   /* File manager */
   .fm-toolbar { padding: 10px 14px; background: var(--surface);
@@ -180,7 +180,7 @@ MAIN_HTML = """<!DOCTYPE html>
     .term-toolbar span { width: 100%; font-size: .78rem; }
     .cmd-input { min-width: 100%; max-width: 100%; font-size: .85rem; flex: 1 1 100%; }
     .btn-run, .btn-clear { flex: 1 1 auto; min-width: 80px; font-size: .8rem; height: 36px; line-height: 36px; white-space: nowrap; }
-    #term-arsbb, #term-netschoolbot, #term-custom { padding: 2px; }
+    #term-netschoolbot, #term-nginx, #term-custom { padding: 2px; }
     .service-controls { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 4px; width: 100%; }
     .service-controls button { min-width: 0; }
     
@@ -228,41 +228,14 @@ MAIN_HTML = """<!DOCTYPE html>
 <div id="notice" style="display:none; background:#2b1d1d; color:#ffb4b4; padding:8px 14px; border-bottom:1px solid #3b2a2a; font-size:.85rem;"></div>
 
 <div class="tabs">
-  <div class="tab active" onclick="switchTab('arsbb')">📋 Лог: ARSBB</div>
-  <div class="tab" onclick="switchTab('arsbb_webhook')">🪝 Лог: ARSBB Deploy</div>
-  <div class="tab" onclick="switchTab('netschoolbot')">🤖 Лог: NetSchoolBot</div>
+  <div class="tab active" onclick="switchTab('netschoolbot')">🤖 Лог: NetSchoolBot</div>
+  <div class="tab" onclick="switchTab('nginx')">🌐 Лог: nginx</div>
   <div class="tab" onclick="switchTab('custom')">⌨️ Терминал</div>
   <div class="tab" onclick="switchTab('filemgr')">📂 Файлы</div>
 </div>
 
-<!-- Панель: лог arsbb -->
-<div class="panel active" id="panel-arsbb">
-  <div class="term-toolbar">
-    <span style="color:var(--muted);font-size:.85rem">Служба: nginx.service</span>
-    <input id="cmd-arsbb" class="cmd-input" placeholder="Команда (bash)"
-           onkeydown="onCmdKey(event, 'arsbb')">
-    <button class="btn-run" onclick="runCommand('arsbb')">▶ Выполнить</button>
-    <button class="btn-clear" onclick="clearTerm('arsbb')">Очистить</button>
-    <button class="btn-run" onclick="connectLog('arsbb')">↺ Переподключить</button>
-  </div>
-  <div id="term-arsbb"></div>
-</div>
-
-<!-- Панель: лог arsbb webhook -->
-<div class="panel" id="panel-arsbb_webhook">
-  <div class="term-toolbar">
-    <span style="color:var(--muted);font-size:.85rem">Служба: arsbb-webhook.service</span>
-    <input id="cmd-arsbb_webhook" class="cmd-input" placeholder="Команда (bash)"
-           onkeydown="onCmdKey(event, 'arsbb_webhook')">
-    <button class="btn-run" onclick="runCommand('arsbb_webhook')">▶ Выполнить</button>
-    <button class="btn-clear" onclick="clearTerm('arsbb_webhook')">Очистить</button>
-    <button class="btn-run" onclick="connectLog('arsbb_webhook')">↺ Переподключить</button>
-  </div>
-  <div id="term-arsbb_webhook"></div>
-</div>
-
 <!-- Панель: лог netschoolbot -->
-<div class="panel" id="panel-netschoolbot">
+<div class="panel active" id="panel-netschoolbot">
   <div class="term-toolbar">
     <span style="color:var(--muted);font-size:.85rem">Служба: netschoolbot.service</span>
     <div class="service-controls">
@@ -281,6 +254,22 @@ MAIN_HTML = """<!DOCTYPE html>
     <button class="btn-run" onclick="connectLog('netschoolbot')">↺ Переподключить</button>
   </div>
   <div id="term-netschoolbot"></div>
+</div>
+
+<!-- Панель: лог nginx -->
+<div class="panel" id="panel-nginx">
+  <div class="term-toolbar">
+    <span style="color:var(--muted);font-size:.85rem">Служба: nginx.service</span>
+    <div class="service-controls">
+      <button class="btn-run" onclick="serviceControl('nginx', 'restart')">🔄 Перезапустить</button>
+      <button class="btn-clear" onclick="clearTerm('nginx')">Очистить</button>
+    </div>
+    <input id="cmd-nginx" class="cmd-input" placeholder="Команда (bash)"
+           onkeydown="onCmdKey(event, 'nginx')">
+    <button class="btn-run" onclick="runCommand('nginx')">▶ Выполнить</button>
+    <button class="btn-run" onclick="connectLog('nginx')">↺ Переподключить</button>
+  </div>
+  <div id="term-nginx"></div>
 </div>
 
 <!-- Панель: интерактивный терминал -->
@@ -396,12 +385,10 @@ function showNotice(msg) {
 if (typeof io !== 'undefined') {
   socket = io();
   socket.on('connect', () => {
-    connectLog('arsbb');
-    connectLog('arsbb_webhook');
     connectLog('netschoolbot');
-    enableLogScrollLoad('arsbb');
-    enableLogScrollLoad('arsbb_webhook');
+    connectLog('nginx');
     enableLogScrollLoad('netschoolbot');
+    enableLogScrollLoad('nginx');
   });
   socket.on('disconnect', () => {
     showNotice('⚠️ Соединение потеряно. Переподключение...');
@@ -417,7 +404,7 @@ if (typeof io !== 'undefined') {
 // Restore active tab from localStorage
 try {
   const savedTab = localStorage.getItem('webterm_active_tab');
-  if (savedTab && ['arsbb','arsbb_webhook','netschoolbot','custom','filemgr'].includes(savedTab)) {
+  if (savedTab && ['netschoolbot','nginx','custom','filemgr'].includes(savedTab)) {
     setTimeout(() => switchTab(savedTab), 100);
   }
 } catch(e) {}
@@ -427,15 +414,14 @@ let currentFmPath = '/';
 let editorPath = '';
 const history = {};  // per-term command history
 const logState = {
-  arsbb: { tail: 500, connected: false, fitted: false },
-  arsbb_webhook: { tail: 500, connected: false, fitted: false },
-  netschoolbot: { tail: 500, connected: false, fitted: false }
+  netschoolbot: { tail: 500, connected: false, fitted: false },
+  nginx: { tail: 500, connected: false, fitted: false }
 };
 
 // ── Утилиты ─────────────────────────────────────────────────
 function switchTab(name) {
   document.querySelectorAll('.tab').forEach((t,i) => {
-    const names = ['arsbb','arsbb_webhook','netschoolbot','custom','filemgr'];
+    const names = ['netschoolbot','nginx','custom','filemgr'];
     t.classList.toggle('active', names[i] === name);
   });
   document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
@@ -497,7 +483,7 @@ function clearTerm(id) {
   if (terms[id]) terms[id].clear();
 }
 
-// ── Log terminals (arsbb / netschoolbot) ───────────────────────
+// ── Log terminals (netschoolbot / nginx) ───────────────────────
 function connectLog(service, reload = false) {
   if (!socket) { showNotice('Socket.IO недоступен. Логи не будут подключены.'); return; }
   mkTerm(service);
@@ -607,16 +593,13 @@ function enableLogScrollLoad(service) {
 // Автоподключение при старте
 window.addEventListener('load', () => {
   initHeaderActions();
-  mkTerm('arsbb');
   mkTerm('netschoolbot');
-  mkTerm('arsbb_webhook');
-  enableLogScrollLoad('arsbb');
-  enableLogScrollLoad('arsbb_webhook');
+  mkTerm('nginx');
   enableLogScrollLoad('netschoolbot');
+  enableLogScrollLoad('nginx');
   setTimeout(() => {
-    ensureFit('arsbb');
-    ensureFit('arsbb_webhook');
     ensureFit('netschoolbot');
+    ensureFit('nginx');
     ensureFit('custom');
   }, 120);
 });

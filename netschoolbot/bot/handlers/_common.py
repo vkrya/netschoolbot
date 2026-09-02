@@ -51,6 +51,7 @@ from ...config import (
     NETSCHOOL_USERS_DIR,
 )
 from ...netschool import client as ns_client
+from ...netschool import http_patch
 from ...netschool.client import (
     NETSCHOOL_SESSION_CACHE,
     NETSCHOOL_SESSION_TTL,

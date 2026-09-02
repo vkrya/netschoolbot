@@ -533,10 +533,17 @@ def register(dp: Dispatcher, bot: Bot) -> None:
             await message.answer("⏳ Ищу школы...")
             try:
                 from netschoolpy import search_schools
-                schools = await search_schools(user_url, query, proxy=ns_client._get_proxy_for_url(user_url))
+                schools = await search_schools(
+                    user_url,
+                    query,
+                    timeout=http_patch.HTTP_TIMEOUT,
+                    proxy=ns_client._get_proxy_for_url(user_url),
+                )
             except Exception as e:
+                # Одна неудача не должна навсегда переводить хост на прокси
+                http_patch.reset_blocked_hosts()
                 err_str = str(e)
-                if any(k in err_str.lower() for k in ("timeout", "timed out", "connect", "network", "unreachable", "refused", "name resol", "nodename", "temporary failure", "serverunavailable", "server unavailable")):
+                if any(k in err_str.lower() for k in ("timeout", "timed out", "connect", "network", "unreachable", "refused", "name resol", "nodename", "temporary failure", "serverunavailable", "server unavailable", "tor", "прокси")):
                     hint = (
                         "⚠️ Сервер НетШколы не ответил вовремя.\n\n"
                         "Возможные причины: временная недоступность сервера, проблемы сети или ограничения региона.\n\n"

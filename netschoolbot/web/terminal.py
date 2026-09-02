@@ -81,9 +81,8 @@ _log_threads: dict = {}  # sid+service -> thread
 _log_procs: dict = {}    # sid+service -> subprocess.Popen
 
 SERVICE_UNITS = {
-  "arsbb": "nginx.service",
-  "arsbb_webhook": "arsbb-webhook.service",
   "netschoolbot": f"{SERVICE_NAME}.service",
+  "nginx": "nginx.service",
 }
 
 _ANSI_COLORS = {
