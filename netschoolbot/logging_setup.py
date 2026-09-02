@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Dict, Optional
 
 from .config import DEBUG_MODE, LOGS_DIR, TELEGRAM_LOGGING_ENABLED
-from .utils import _msk_time, now_msk
+from .utils import _msk_time, now_msk, write_json_atomic
 
 LAST_LOGS_FILENAME = "lastlogs.txt"
 LAST_START_META_FILENAME = ".last_start.txt"
@@ -42,8 +42,7 @@ def get_log_filters() -> Dict[str, bool]:
 
 def save_log_filters(filters: Dict[str, bool]) -> None:
     try:
-        LOG_FILTERS_FILE.parent.mkdir(parents=True, exist_ok=True)
-        LOG_FILTERS_FILE.write_text(json.dumps(filters, ensure_ascii=False, indent=2), encoding="utf-8")
+        write_json_atomic(LOG_FILTERS_FILE, filters)
     except Exception:
         pass
 

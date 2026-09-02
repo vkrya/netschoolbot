@@ -50,6 +50,7 @@ from ..utils import (
     _msk_tz,
     _normalize_title,
     now_msk,
+    write_json_atomic,
 )
 from .client import (
     _apply_selected_student_to_client,
@@ -283,8 +284,7 @@ class GradeNotifier:
     def _save_sent_grades(self):
         """Сохранить список отправленных оценок в файл"""
         try:
-            with open(self.sent_grades_file, 'w', encoding='utf-8') as f:
-                json.dump({'grades': list(self.sent_grades)}, f, ensure_ascii=False, indent=2)
+            write_json_atomic(self.sent_grades_file, {'grades': list(self.sent_grades)})
         except Exception as e:
             logger.error(f"Ошибка при сохранении sent_grades.json: {e}")
 
@@ -309,8 +309,7 @@ class GradeNotifier:
         if not self.known_grades_file:
             return
         try:
-            with open(self.known_grades_file, 'w', encoding='utf-8') as f:
-                json.dump({"grades": self.known_grades}, f, ensure_ascii=False, indent=2)
+            write_json_atomic(self.known_grades_file, {"grades": self.known_grades})
         except Exception as e:
             logger.error(f"Ошибка при сохранении known_grades.json: {e}")
 
@@ -333,8 +332,7 @@ class GradeNotifier:
         if not self.known_homework_file:
             return
         try:
-            with open(self.known_homework_file, 'w', encoding='utf-8') as f:
-                json.dump({"homework": self.known_homework}, f, ensure_ascii=False, indent=2)
+            write_json_atomic(self.known_homework_file, {"homework": self.known_homework})
             self._known_homework_initialized = True
         except Exception as e:
             logger.error(f"Ошибка при сохранении known_homework.json: {e}")

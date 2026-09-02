@@ -243,7 +243,7 @@ async def _login_retry_worker(user_id: int, bot: Bot) -> None:
                     user_data["bulk_prompt_pending"] = False
                     user_data["updated_at"] = datetime.now().isoformat()
                     save_netschool_users()
-                    await refresh_user_grade_task(user_id, runtime.bot or bot, log_bot, TG_ADMIN_ID)
+                    await refresh_user_grade_task(user_id, runtime.bot or bot, runtime.log_bot, TG_ADMIN_ID)
                     await bot.send_message(user_id, "✅ Сессия восстановлена. Уведомления включены.")
                     await stop_login_retry_task(user_id)
                     return
@@ -279,7 +279,7 @@ async def _login_retry_worker(user_id: int, bot: Bot) -> None:
             user_data["bulk_prompt_pending"] = False
             user_data["updated_at"] = datetime.now().isoformat()
             save_netschool_users()
-            await refresh_user_grade_task(user_id, runtime.bot or bot, log_bot, TG_ADMIN_ID)
+            await refresh_user_grade_task(user_id, runtime.bot or bot, runtime.log_bot, TG_ADMIN_ID)
             await bot.send_message(user_id, "✅ Успешный вход. Уведомления включены.")
             await stop_login_retry_task(user_id)
             return
