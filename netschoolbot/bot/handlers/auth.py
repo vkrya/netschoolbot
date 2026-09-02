@@ -371,6 +371,11 @@ def register(dp: Dispatcher, bot: Bot) -> None:
         user_id = callback.from_user.id
         user_data = get_netschool_user(user_id)
         await callback.answer()
+        # Убираем сообщение об устаревшем QR: вместо него сейчас придёт новый код.
+        try:
+            await callback.message.delete()
+        except Exception:
+            pass
         await _start_qr_login(callback.message, user_id, user_data)
 
     @dp.callback_query(F.data.in_({"ns_bulk_send_all", "ns_bulk_summary", "ns_bulk_skip"}))

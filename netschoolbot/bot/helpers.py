@@ -24,7 +24,7 @@ from aiogram.types import (
 from netschoolpy import NetSchool
 import netschoolpy.exceptions as netschoolpy_exceptions
 
-from ..config import ADMIN_ID as TG_ADMIN_ID, CHECK_INTERVAL
+from ..config import ADMIN_ID as TG_ADMIN_ID, CHECK_INTERVAL, QR_LOGIN_TTL
 from ..netschool import client as ns_client
 from ..netschool.client import (
     _apply_selected_student_to_client,
@@ -191,6 +191,20 @@ async def _get_ns_client(message: Message, user_id: Optional[int] = None) -> Opt
                 setattr(ns, "_from_cache", True)
                 await _ensure_student_selected(ns, user_data)
                 return ns
+        # Последняя попытка: сессия, сохранённая при QR-входе, — она живёт на
+        # диске и переживает перезапуск бота.
+        user_url = _get_user_ns_url(user_data)
+        if user_url:
+            restored = _make_netschool(user_url)
+            if await _try_restore_netschool_session(user_id, restored):
+                if await _netschool_session_is_alive(restored) is not False:
+                    _apply_selected_student_to_client(restored, user_data)
+                    _ns_clients[user_id] = restored
+                    NETSCHOOL_SESSION_CACHE[user_id] = {"client": restored, "last_used": datetime.now()}
+                    setattr(restored, "_from_cache", True)
+                    await _ensure_student_selected(restored, user_data)
+                    return restored
+            await _close_netschool_client(restored, do_logout=False)
         await message.reply("❌ Сессия QR-входа истекла. Используйте /relogin для повторного входа.")
         return None
     if not login or not password:
@@ -762,10 +776,37 @@ async def _start_qr_login(msg, user_id: int, user_data: dict):
         "Это может занять несколько секунд."
     )
 
-    qr_photo_msg = None
+    qr_msg = None
+    qr_expired = asyncio.Event()
+    expiry_task: Optional[asyncio.Task] = None
+    login_task: Optional[asyncio.Task] = None
+
+    async def _delete_qr_message():
+        """Убираем протухшую картинку, чтобы её нельзя было сканировать."""
+        nonlocal qr_msg
+        if qr_msg is None:
+            return
+        try:
+            await qr_msg.delete()
+        except Exception:
+            pass
+        qr_msg = None
+
+    async def _expire_qr():
+        try:
+            await asyncio.sleep(QR_LOGIN_TTL)
+        except asyncio.CancelledError:
+            return
+        qr_expired.set()
+        if login_task is not None:
+            login_task.cancel()
 
     async def qr_callback(qr_content: str):
-        nonlocal qr_photo_msg
+        nonlocal qr_msg, expiry_task
+        caption = (
+            "📱 Отсканируйте QR-код в приложении «Госуслуги».\n\n"
+            f"⏳ Код действует {QR_LOGIN_TTL} сек, ожидаю подтверждения..."
+        )
         try:
             import qrcode
             qr_img = qrcode.QRCode(
@@ -781,37 +822,60 @@ async def _start_qr_login(msg, user_id: int, user_data: dict):
             img.save(buf, format="PNG")
             buf.seek(0)
             photo = BufferedInputFile(buf.read(), filename="gosuslugi_qr.png")
-            qr_photo_msg = await msg.answer_photo(
-                photo=photo,
-                caption=(
-                    "📱 Отсканируйте QR-код в приложении «Госуслуги».\n\n"
-                    "⏳ Ожидаю подтверждения..."
-                ),
-            )
+            qr_msg = await msg.answer_photo(photo=photo, caption=caption)
         except Exception as e:
             logger.warning(f"Не удалось создать QR-картинку: {e}")
-            await msg.answer(
+            qr_msg = await msg.answer(
                 f"📱 Откройте ссылку в приложении «Госуслуги»:\n\n"
                 f"<code>{html.escape(qr_content)}</code>\n\n"
-                "⏳ Ожидаю подтверждения...",
+                f"⏳ Ссылка действует {QR_LOGIN_TTL} сек, ожидаю подтверждения...",
                 parse_mode="HTML",
             )
+        # QR живёт около минуты — заводим свой таймер, чтобы не показывать
+        # пользователю уже мёртвый код.
+        expiry_task = asyncio.create_task(_expire_qr(), name=f"ns_qr_ttl_{user_id}")
 
     ns = None
     try:
         from netschoolpy import NetSchool
         ns = _make_netschool(user_url)
-        await ns.login_via_gosuslugi_qr(
-            qr_callback=qr_callback,
-            qr_timeout=120,
-            school=user_school,
-            timeout=30,
+        login_task = asyncio.create_task(
+            ns.login_via_gosuslugi_qr(
+                qr_callback=qr_callback,
+                qr_timeout=QR_LOGIN_TTL + 30,
+                school=user_school,
+                timeout=30,
+            ),
+            name=f"ns_qr_login_{user_id}",
         )
+        try:
+            await login_task
+        except asyncio.CancelledError:
+            if not qr_expired.is_set():
+                raise
+            # Сработал наш таймер: код устарел, ждать больше нечего.
+            try:
+                await status_msg.delete()
+            except Exception:
+                pass
+            await _delete_qr_message()
+            set_netschool_user_state(user_id, "")
+            await msg.answer(
+                f"⏳ QR-код устарел (он действует {QR_LOGIN_TTL} сек).\n"
+                "Нажмите «Новый QR», чтобы получить свежий код.",
+                reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                    [InlineKeyboardButton(text="🔄 Новый QR", callback_data="ns_qr_retry")],
+                    [InlineKeyboardButton(text="🏛 Логин/пароль Госуслуг", callback_data="ns_auth_method:esia")],
+                    [InlineKeyboardButton(text="◀️ Назад", callback_data="ns_back_cancel")],
+                ])
+            )
+            return
         # Успешный вход
         try:
             await status_msg.delete()
         except Exception:
             pass
+        await _delete_qr_message()
         user_data["login"] = "gosuslugi_qr"
         user_data["password"] = ""
         user_data["login_type"] = "esia_qr"
@@ -827,6 +891,9 @@ async def _start_qr_login(msg, user_id: int, user_data: dict):
         )
         await _close_netschool_session_for_user(user_id, clear_saved=True)
         _ns_clients[user_id] = ns
+        # QR-вход нельзя повторить автоматически, поэтому сохраняем сессию на
+        # диск: она переживёт перезапуск бота и простой дольше кэша в памяти.
+        _save_netschool_session(user_id, ns)
         ns = None  # не закрываем — сохранили
         await start_user_grade_task(user_id, runtime.bot, runtime.log_bot, TG_ADMIN_ID)
     except asyncio.TimeoutError:
@@ -834,6 +901,7 @@ async def _start_qr_login(msg, user_id: int, user_data: dict):
             await status_msg.delete()
         except Exception:
             pass
+        await _delete_qr_message()
         set_netschool_user_state(user_id, "")
         await msg.answer(
             "⏰ Время ожидания QR-кода истекло.\n"
@@ -849,6 +917,7 @@ async def _start_qr_login(msg, user_id: int, user_data: dict):
             await status_msg.delete()
         except Exception:
             pass
+        await _delete_qr_message()
         set_netschool_user_state(user_id, "")
         err_text = str(e)
         err_lower = err_text.lower()
@@ -857,8 +926,8 @@ async def _start_qr_login(msg, user_id: int, user_data: dict):
         # Сессия ESIA истекла / QR протух
         if "сессия истекла" in err_lower or "session" in err_lower or "expired" in err_lower or "outdated" in err_lower:
             await msg.answer(
-                "⏰ QR-сессия истекла.\n"
-                "Попробуйте сгенерировать новый QR-код.",
+                "⏰ QR-код устарел, Госуслуги закрыли сессию.\n"
+                "Нажмите «Новый QR», чтобы получить свежий код.",
                 reply_markup=InlineKeyboardMarkup(inline_keyboard=[
                     [InlineKeyboardButton(text="🔄 Новый QR", callback_data="ns_qr_retry")],
                     [InlineKeyboardButton(text="◀️ Назад", callback_data="ns_back_cancel")],
@@ -894,6 +963,9 @@ async def _start_qr_login(msg, user_id: int, user_data: dict):
                 ])
             )
     finally:
+        if expiry_task is not None and not expiry_task.done():
+            expiry_task.cancel()
+        await _delete_qr_message()
         if ns is not None:
             try:
                 await _close_netschool_client(ns, do_logout=False)
