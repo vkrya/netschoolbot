@@ -612,11 +612,11 @@ def register(dp: Dispatcher, bot: Bot) -> None:
                 set_netschool_user_state(user_id, None)
                 return
             user_school = _get_user_ns_school(user_data)
-            ns_client = _make_netschool(user_url)
+            ns_session = _make_netschool(user_url)
             await message.answer("⏳ Вхожу через Госуслуги...")
             try:
                 otp_cb = _make_esia_mfa_callback(user_id, bot)
-                await ns_client.login_via_gosuslugi(
+                await ns_session.login_via_gosuslugi(
                     esia_login=user_data.get("login"),
                     esia_password=user_data.get("password"),
                     school=user_school or None,
@@ -624,9 +624,9 @@ def register(dp: Dispatcher, bot: Bot) -> None:
                     otp_callback=otp_cb,
                 )
                 try:
-                    _apply_selected_student_to_client(ns_client, user_data)
-                    _students, _sid, _ = await _sync_user_students_from_ns(ns_client, user_data, persist=False)
-                    fio = await _fetch_student_name(ns_client)
+                    _apply_selected_student_to_client(ns_session, user_data)
+                    _students, _sid, _ = await _sync_user_students_from_ns(ns_session, user_data, persist=False)
+                    fio = await _fetch_student_name(ns_session)
                     if fio:
                         user_data["student_name"] = fio
                 except Exception:
@@ -679,7 +679,7 @@ def register(dp: Dispatcher, bot: Bot) -> None:
                     )
             finally:
                 try:
-                    await _close_netschool_client(ns_client, do_logout=False)
+                    await _close_netschool_client(ns_session, do_logout=False)
                 except Exception:
                     pass
             return
@@ -785,24 +785,24 @@ def register(dp: Dispatcher, bot: Bot) -> None:
                 await message.answer("❌ Регион/школа не настроены. Начните заново через /login.")
                 set_netschool_user_state(user_id, None)
                 return
-            ns_client = _make_netschool(user_url)
+            ns_session = _make_netschool(user_url)
             await message.answer("⏳ Пытаюсь войти в журнал...")
             try:
-                await ns_client.login(
+                await ns_session.login(
                     user_name=user_data.get("login"),
                     password=user_data.get("password"),
                     school=user_school
                 )
                 try:
-                    _apply_selected_student_to_client(ns_client, user_data)
-                    _students, _sid, _ = await _sync_user_students_from_ns(ns_client, user_data, persist=False)
-                    fio = await _fetch_student_name(ns_client)
+                    _apply_selected_student_to_client(ns_session, user_data)
+                    _students, _sid, _ = await _sync_user_students_from_ns(ns_session, user_data, persist=False)
+                    fio = await _fetch_student_name(ns_session)
                     if fio:
                         user_data["student_name"] = fio
                 except Exception:
                     pass
                 try:
-                    await _close_netschool_client(ns_client, do_logout=False)
+                    await _close_netschool_client(ns_session, do_logout=False)
                 except Exception:
                     pass
 
