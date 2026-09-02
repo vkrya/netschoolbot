@@ -1,0 +1,17 @@
+[Unit]
+Description=NetSchool Telegram bot + PWA (netschool.ikrya.ru)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/netschoolbot
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/opt/netschoolbot/venv/bin/python /opt/netschoolbot/run.py
+Restart=always
+RestartSec=5
+KillSignal=SIGTERM
+TimeoutStopSec=30
+
+[Install]
+WantedBy=multi-user.target

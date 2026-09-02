@@ -1,0 +1,16 @@
+.env
+.env.*
+data/
+*.session
+*.db
+*.fifo
+*.log
+*.zip
+*.tar.gz
+*.bak_*
+__pycache__/
+*.py[cod]
+venv/
+.venv/
+netschoolpy/
+.DS_Store
