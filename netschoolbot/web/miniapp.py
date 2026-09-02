@@ -46,6 +46,7 @@ from ..config import (
     LOG_BOT_TOKEN,
 )
 from ..netschool.client import _make_netschool
+from ..utils import write_json_atomic
 from ..webpush import (
     push_summary,
     remove_user_subscription,
@@ -110,10 +111,8 @@ def _cleanup_expired_miniapp_tokens(store: dict) -> bool:
   return bool(expired) or archived_changed
 
 def _save_miniapp_tokens(store: dict) -> None:
-  NETSCHOOL_MINIAPP_TOKENS_FILE.parent.mkdir(parents=True, exist_ok=True)
   normalized = _normalize_miniapp_token_store(store)
-  NETSCHOOL_MINIAPP_TOKENS_FILE.write_text(json.dumps(normalized, ensure_ascii=False, indent=2), encoding="utf-8")
-  os.chmod(NETSCHOOL_MINIAPP_TOKENS_FILE, 0o600)
+  write_json_atomic(NETSCHOOL_MINIAPP_TOKENS_FILE, normalized, mode=0o600)
 
 def _consume_netschool_miniapp_token(token: str) -> str | None:
   if not token:
@@ -303,9 +302,7 @@ def _load_session_codes() -> dict:
   return _load_json_file(NETSCHOOL_SESSION_CODES_FILE, {"codes": {}})
 
 def _save_session_codes(store: dict) -> None:
-  NETSCHOOL_SESSION_CODES_FILE.parent.mkdir(parents=True, exist_ok=True)
-  NETSCHOOL_SESSION_CODES_FILE.write_text(json.dumps(store, ensure_ascii=False, indent=2), encoding="utf-8")
-  os.chmod(NETSCHOOL_SESSION_CODES_FILE, 0o600)
+  write_json_atomic(NETSCHOOL_SESSION_CODES_FILE, store, mode=0o600)
 
 def _cleanup_expired_session_codes(store: dict) -> None:
   now = int(time.time())
@@ -345,9 +342,7 @@ def _load_miniapp_access_requests() -> dict:
   return {"requests": requests_store}
 
 def _save_miniapp_access_requests(store: dict) -> None:
-  NETSCHOOL_MINIAPP_ACCESS_REQUESTS_FILE.parent.mkdir(parents=True, exist_ok=True)
-  NETSCHOOL_MINIAPP_ACCESS_REQUESTS_FILE.write_text(json.dumps(store, ensure_ascii=False, indent=2), encoding="utf-8")
-  os.chmod(NETSCHOOL_MINIAPP_ACCESS_REQUESTS_FILE, 0o600)
+  write_json_atomic(NETSCHOOL_MINIAPP_ACCESS_REQUESTS_FILE, store, mode=0o600)
 
 def _cleanup_expired_miniapp_access_requests(store: dict) -> bool:
   requests_store = store.setdefault("requests", {})
@@ -485,8 +480,7 @@ def _load_gallery_index() -> list:
   return data.get("icons", [])
 
 def _save_gallery_index(icons: list) -> None:
-  NETSCHOOL_GALLERY_INDEX_FILE.parent.mkdir(parents=True, exist_ok=True)
-  NETSCHOOL_GALLERY_INDEX_FILE.write_text(json.dumps({"icons": icons}, ensure_ascii=False, indent=2), encoding="utf-8")
+  write_json_atomic(NETSCHOOL_GALLERY_INDEX_FILE, {"icons": icons})
 
 def _get_gallery_icon_owner(gallery_id: str) -> int | None:
   for icon in _load_gallery_index():
@@ -728,11 +722,18 @@ def _build_netschool_appearance_payload(user_data: dict) -> dict:
   }
 
 def _save_netschool_user_data(user_id: int, user_data: dict) -> None:
-  payload = _load_json_file(NETSCHOOL_USERS_FILE, {"users": {}})
+  payload = _load_json_file(NETSCHOOL_USERS_FILE, None)
+  if not isinstance(payload, dict):
+    # Файл есть, но не читается: записав сюда только одного пользователя,
+    # мы бы стёрли всех остальных. Лучше упасть, чем потерять данные.
+    if NETSCHOOL_USERS_FILE.exists() and NETSCHOOL_USERS_FILE.stat().st_size > 0:
+      raise RuntimeError(f"Файл пользователей повреждён: {NETSCHOOL_USERS_FILE}")
+    payload = {"users": {}}
   users = payload.setdefault("users", {})
+  if not isinstance(users, dict):
+    raise RuntimeError(f"Файл пользователей повреждён: {NETSCHOOL_USERS_FILE}")
   users[str(user_id)] = user_data
-  NETSCHOOL_USERS_FILE.parent.mkdir(parents=True, exist_ok=True)
-  NETSCHOOL_USERS_FILE.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+  write_json_atomic(NETSCHOOL_USERS_FILE, payload)
 
 def _normalize_mail_seen_ids(values, *, limit: int = 500) -> list[int]:
   normalized: set[int] = set()
@@ -753,9 +754,7 @@ def _load_netschool_cache(user_id: int) -> dict:
   return _load_json_file(_netschool_cache_path(user_id), {})
 
 def _save_netschool_cache(user_id: int, data: dict) -> None:
-  path = _netschool_cache_path(user_id)
-  path.parent.mkdir(parents=True, exist_ok=True)
-  path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+  write_json_atomic(_netschool_cache_path(user_id), data)
 
 def _load_netschool_miniapp_cache_section(user_id: int, section: str):
   cache = _load_netschool_cache(user_id)

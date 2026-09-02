@@ -35,7 +35,7 @@ from .config import (
     MINIAPP_TOKENS_FILE as NETSCHOOL_MINIAPP_TOKENS_FILE,
     USERS_FILE as NETSCHOOL_USERS_FILE,
 )
-from .utils import _normalize_subject, _normalize_title, _parse_hhmm, _safe_int
+from .utils import _normalize_subject, _normalize_title, _parse_hhmm, _safe_int, write_json_atomic
 from .webpush import send_user_push
 
 logger = logging.getLogger("netschoolbot")
@@ -82,15 +82,21 @@ def load_netschool_users() -> None:
         logger.info(f"✅ Загружены настройки NetSchool пользователей: {len(netschool_users['users'])}")
     except Exception as e:
         logger.error(f"❌ Ошибка загрузки NetSchool пользователей: {e}")
-        netschool_users = {"users": {}}
-        NETSCHOOL_USERS_FILE_MTIME = 0.0
+        # Не обнуляем данные в памяти: пустой словарь тут же уехал бы в файл
+        # при ближайшем save_netschool_users() и удалил бы всех пользователей.
+        if not isinstance(netschool_users, dict):
+            netschool_users = {"users": {}}
+        netschool_users.setdefault("users", {})
+        try:
+            NETSCHOOL_USERS_FILE_MTIME = Path(NETSCHOOL_USERS_FILE).stat().st_mtime
+        except Exception:
+            NETSCHOOL_USERS_FILE_MTIME = 0.0
 
 def save_netschool_users() -> None:
     """Сохраняет настройки пользователей NetSchool"""
     global NETSCHOOL_USERS_FILE_MTIME
     try:
-        with open(NETSCHOOL_USERS_FILE, 'w', encoding='utf-8') as f:
-            json.dump(netschool_users, f, ensure_ascii=False, indent=2)
+        write_json_atomic(NETSCHOOL_USERS_FILE, netschool_users)
         try:
             NETSCHOOL_USERS_FILE_MTIME = Path(NETSCHOOL_USERS_FILE).stat().st_mtime
         except Exception:
@@ -133,8 +139,7 @@ def _load_grade_feedback_store() -> Dict[str, Any]:
 
 def _save_grade_feedback_store(store: Dict[str, Any]) -> None:
     try:
-        with open(NETSCHOOL_GRADE_FEEDBACK_FILE, "w", encoding="utf-8") as f:
-            json.dump(store, f, ensure_ascii=False, indent=2)
+        write_json_atomic(NETSCHOOL_GRADE_FEEDBACK_FILE, store)
     except Exception as e:
         logger.warning(f"Не удалось сохранить голоса по оценкам: {e}")
 
@@ -211,9 +216,7 @@ def _save_netschool_miniapp_tokens(data: Dict[str, Any]) -> None:
             "tokens": (data or {}).get("tokens") if isinstance((data or {}).get("tokens"), dict) else {},
             "archived_tokens": (data or {}).get("archived_tokens") if isinstance((data or {}).get("archived_tokens"), dict) else {},
         }
-        with open(NETSCHOOL_MINIAPP_TOKENS_FILE, "w", encoding="utf-8") as f:
-            json.dump(payload, f, ensure_ascii=False, indent=2)
-        os.chmod(NETSCHOOL_MINIAPP_TOKENS_FILE, 0o600)
+        write_json_atomic(NETSCHOOL_MINIAPP_TOKENS_FILE, payload, mode=0o600)
     except Exception as e:
         logger.warning(f"Не удалось сохранить токены миниприложения: {e}")
 
@@ -277,9 +280,7 @@ def _load_netschool_session_codes() -> Dict[str, Any]:
 def _save_netschool_session_codes(store: Dict[str, Any]) -> None:
     try:
         NETSCHOOL_SESSION_CODES_FILE.parent.mkdir(parents=True, exist_ok=True)
-        with open(NETSCHOOL_SESSION_CODES_FILE, "w", encoding="utf-8") as f:
-            json.dump(store, f, ensure_ascii=False, indent=2)
-        os.chmod(NETSCHOOL_SESSION_CODES_FILE, 0o600)
+        write_json_atomic(NETSCHOOL_SESSION_CODES_FILE, store, mode=0o600)
     except Exception as e:
         logger.warning(f"Не удалось сохранить recovery-коды PWA: {e}")
 
@@ -318,9 +319,7 @@ def _load_netschool_miniapp_access_requests() -> Dict[str, Any]:
 def _save_netschool_miniapp_access_requests(store: Dict[str, Any]) -> None:
     try:
         NETSCHOOL_MINIAPP_ACCESS_REQUESTS_FILE.parent.mkdir(parents=True, exist_ok=True)
-        with open(NETSCHOOL_MINIAPP_ACCESS_REQUESTS_FILE, "w", encoding="utf-8") as f:
-            json.dump(store, f, ensure_ascii=False, indent=2)
-        os.chmod(NETSCHOOL_MINIAPP_ACCESS_REQUESTS_FILE, 0o600)
+        write_json_atomic(NETSCHOOL_MINIAPP_ACCESS_REQUESTS_FILE, store, mode=0o600)
     except Exception as e:
         logger.warning(f"Не удалось сохранить запросы доступа PWA: {e}")
 
@@ -359,9 +358,7 @@ def _load_pwa_gallery() -> list[dict[str, Any]]:
         return []
 
 def _save_pwa_gallery(icons: list[dict[str, Any]]) -> None:
-    PWA_GALLERY_INDEX_FILE.parent.mkdir(parents=True, exist_ok=True)
-    with open(PWA_GALLERY_INDEX_FILE, "w", encoding="utf-8") as f:
-        json.dump({"icons": icons}, f, ensure_ascii=False, indent=2)
+    write_json_atomic(PWA_GALLERY_INDEX_FILE, {"icons": icons})
 
 def _pwa_gallery_image_path(gallery_id: str) -> Path:
     return PWA_GALLERY_DIR / f"{gallery_id}.png"

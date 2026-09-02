@@ -545,6 +545,7 @@ def register(dp: Dispatcher, bot: Bot) -> None:
         # Original sum
         osum = 0
         ow = 0
+        ocount = 0
         if not from_scratch:
             for s, _, _, mark, weight in entries:
                 if s != subject or mark is None:
@@ -556,6 +557,7 @@ def register(dp: Dispatcher, bot: Bot) -> None:
                     ow += weight
                 except (ValueError, TypeError):
                     continue
+                ocount += 1
                 
         # Simulated additions
         tsum = osum + (c5 * 5) + (c4 * 4) + (c3 * 3) + (c2 * 2)
@@ -568,7 +570,7 @@ def register(dp: Dispatcher, bot: Bot) -> None:
             f"🧮 <b>Калькулятор оценок</b>",
             f"Предмет: <b>{subject}</b>",
             "",
-            f"Текущий балл: <b>{o_avg:.2f}</b> (оценок: {ow})",
+            f"Текущий балл: <b>{o_avg:.2f}</b> (оценок: {ocount})",
             "",
             "Добавлено в расчёт:",
             f"• «5»: <b>{c5}</b>",

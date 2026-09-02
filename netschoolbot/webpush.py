@@ -10,6 +10,7 @@ except Exception:  # pragma: no cover - optional dependency during local editing
 
 
 from .config import NETSCHOOL_USERS_DIR, VAPID_PRIVATE_KEY, VAPID_PUBLIC_KEY, VAPID_SUBJECT
+from .utils import write_json_atomic
 
 PUSH_STORE_FILE = NETSCHOOL_USERS_DIR / "webpush_subscriptions.json"
 
@@ -27,8 +28,7 @@ def _load_store() -> dict:
 
 
 def _save_store(store: dict) -> None:
-    PUSH_STORE_FILE.parent.mkdir(parents=True, exist_ok=True)
-    PUSH_STORE_FILE.write_text(json.dumps(store, ensure_ascii=False, indent=2), encoding="utf-8")
+    write_json_atomic(PUSH_STORE_FILE, store)
 
 
 def _vapid_public_key() -> str:

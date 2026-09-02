@@ -32,6 +32,7 @@ from ..utils import (
     _normalize_subject,
     _normalize_title,
     _parse_mark_value,
+    write_json_atomic,
 )
 
 logger = logging.getLogger("netschoolbot")
@@ -305,8 +306,7 @@ def _load_netschool_cache(user_id: int) -> dict:
 def _save_netschool_cache(user_id: int, data: dict) -> None:
     path = _netschool_cache_path(user_id)
     try:
-        with open(path, "w", encoding="utf-8") as f:
-            json.dump(data, f, ensure_ascii=False, indent=2)
+        write_json_atomic(path, data)
     except Exception:
         pass
 

@@ -251,3 +251,40 @@ def parse_interval_input(raw: str) -> Optional[int]:
     except Exception:
         return None
 
+
+def write_json_atomic(path, data: Any, *, mode: Optional[int] = None, indent: int = 2) -> None:
+    """Атомарно записывает JSON: временный файл рядом + os.replace.
+
+    Файлы состояния пишут и поток бота, и поток веб-панели. Обычная запись
+    (open(..., "w")) сначала обрезает файл, поэтому читатель в этот момент
+    видит пустоту, откатывается на значение по умолчанию и затем сохраняет
+    его поверх — так терялись данные пользователей.
+    """
+    import json
+    import os
+    import tempfile
+    from pathlib import Path as _Path
+
+    target = _Path(path)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp_name = tempfile.mkstemp(dir=str(target.parent), prefix=f".{target.name}.", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=indent)
+            f.flush()
+            os.fsync(f.fileno())
+        if mode is None:
+            # mkstemp создаёт файл с 0600 — сохраняем права уже существующего
+            # файла, чтобы атомарная запись не меняла режим доступа молча.
+            try:
+                mode = target.stat().st_mode & 0o777
+            except OSError:
+                mode = 0o644
+        os.chmod(tmp_name, mode)
+        os.replace(tmp_name, target)
+    except BaseException:
+        try:
+            os.unlink(tmp_name)
+        except OSError:
+            pass
+        raise
