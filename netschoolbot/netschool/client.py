@@ -342,7 +342,12 @@ async def _fetch_diary_days(ns: NetSchool, weeks_back: int = 5, weeks_forward: i
                         all_days.append(day)
         except Exception as e:
             logger.warning(f"Ошибка при запросе недели {current}: {e}")
-            await _notify_netschool_error(f"Ошибка при запросе недели {current}: {e}")
+            try:
+                from ..bot.tasks import _notify_netschool_error
+
+                await _notify_netschool_error(f"Ошибка при запросе недели {current}: {e}")
+            except Exception:
+                pass
         current = current + timedelta(days=7)
     return all_days
 

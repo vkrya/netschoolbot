@@ -3,13 +3,15 @@
 import html
 import json
 import logging
+from collections import Counter
 from datetime import datetime, timedelta, timezone as dt_timezone
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, Set
 
 from ..config import CHECK_INTERVAL, NETSCHOOL_CACHE_DIR
 from ..storage import (
     _clamp_interval,
+    _get_available_students,
     _get_user_ns_school,
     _get_user_ns_url,
     format_user_quiet_hours,
@@ -20,6 +22,7 @@ from ..storage import (
 )
 from ..utils import (
     _clean_assignment_content,
+    _next_three_days,
     _current_quarter_start,
     _extract_mark_value,
     _file_count_label,

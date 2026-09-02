@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Any, Dict, Optional, Set
 
 from aiogram import Bot
+from aiogram.exceptions import TelegramAPIError, TelegramRetryAfter
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
 from netschoolpy import NetSchool

@@ -8,7 +8,7 @@ qrcode[pil]>=7.0
 Pillow
 
 # Сетевой город
-git+https://github.com/Vladcom4iiik/netschoolpy.git
+netschoolpy==3.3.3
 marshmallow
 marshmallow_dataclass
 typing-inspect

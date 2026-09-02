@@ -4,7 +4,7 @@ import calendar
 import datetime
 import html
 import logging
-from datetime import timedelta
+from datetime import timedelta, timezone as dt_timezone
 from pathlib import Path
 from typing import Any, Dict, Optional
 
@@ -29,7 +29,7 @@ from ..storage import (
     format_user_quiet_hours,
     get_user_student_name,
 )
-from ..utils import _format_date_label, _normalize_subject
+from ..utils import _format_date_label, _normalize_subject, _safe_int
 from . import runtime
 
 logger = logging.getLogger("netschoolbot")

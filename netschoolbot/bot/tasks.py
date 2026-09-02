@@ -21,7 +21,19 @@ from ..config import (
     NETSCHOOL_USERS_DIR,
     USERS_FILE as NETSCHOOL_USERS_FILE,
 )
-from ..netschool.client import _close_netschool_session_for_user
+from ..netschool.client import (
+    _apply_selected_student_to_client,
+    _classify_login_error,
+    _close_netschool_client,
+    _close_netschool_session_for_user,
+    _fetch_student_name,
+    _make_netschool,
+    _netschool_session_is_alive,
+    _netschool_session_path,
+    _save_netschool_session,
+    _sync_user_students_from_ns,
+    _try_restore_netschool_session,
+)
 from ..netschool.notifier import GradeNotifier
 from .. import storage
 from ..storage import (
@@ -36,6 +48,7 @@ from ..storage import (
     save_netschool_users,
 )
 from . import runtime
+from .esia import _make_esia_mfa_callback
 from .runtime import (
     netschool_login_retry_tasks,
     netschool_user_notifiers,
@@ -194,7 +207,7 @@ async def _login_retry_worker(user_id: int, bot: Bot) -> None:
                     user_data["bulk_prompt_pending"] = False
                     user_data["updated_at"] = datetime.now().isoformat()
                     save_netschool_users()
-                    await refresh_user_grade_task(user_id, netschool_bot or bot, log_bot, TG_ADMIN_ID)
+                    await refresh_user_grade_task(user_id, runtime.bot or bot, log_bot, TG_ADMIN_ID)
                     await bot.send_message(user_id, "✅ Сессия восстановлена. Уведомления включены.")
                     await stop_login_retry_task(user_id)
                     return
@@ -230,7 +243,7 @@ async def _login_retry_worker(user_id: int, bot: Bot) -> None:
             user_data["bulk_prompt_pending"] = False
             user_data["updated_at"] = datetime.now().isoformat()
             save_netschool_users()
-            await refresh_user_grade_task(user_id, netschool_bot or bot, log_bot, TG_ADMIN_ID)
+            await refresh_user_grade_task(user_id, runtime.bot or bot, log_bot, TG_ADMIN_ID)
             await bot.send_message(user_id, "✅ Успешный вход. Уведомления включены.")
             await stop_login_retry_task(user_id)
             return
