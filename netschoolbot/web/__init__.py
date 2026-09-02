@@ -1,9 +1,21 @@
-"""Веб-часть NetSchool-бота: панель управления и PWA мини-приложение."""
+"""Веб-часть NetSchool-бота.
 
-from .app import app, socketio  # noqa: F401
+По умолчанию публикуется только PWA мини-приложение. Панель управления
+сервером (терминал, файловый менеджер, управление службами) подключается
+лишь при NETSCHOOL_PANEL_ENABLED=true — на боевом домене администрирование
+вынесено в отдельную панель на vdsru.ikrya.ru.
+"""
+
+from ..config import PANEL_ENABLED
+from .app import app, register_root_redirect, socketio  # noqa: F401
 
 # Импорт ради регистрации маршрутов и socket.io-обработчиков.
-from . import files, miniapp, terminal  # noqa: E402,F401
+from . import miniapp  # noqa: E402,F401
+
+if PANEL_ENABLED:
+    from . import files, panel, terminal  # noqa: E402,F401
+else:
+    register_root_redirect()
 
 
 def run_web() -> None:

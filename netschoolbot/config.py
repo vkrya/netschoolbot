@@ -120,6 +120,9 @@ VAPID_SUBJECT = (os.getenv("NETSCHOOL_VAPID_SUBJECT") or "mailto:admin@netschool
 
 # ============= ВЕБ-ПАНЕЛЬ (терминал + файловый менеджер) =============
 WEB_ENABLED = get_env_bool("NETSCHOOL_WEB_ENABLED", True)
+# Панель управления сервером здесь выключена: она живёт отдельно на
+# vdsru.ikrya.ru, а netschool.ikrya.ru отдаёт только мини-приложение.
+PANEL_ENABLED = get_env_bool("NETSCHOOL_PANEL_ENABLED", False)
 WEB_PORT = get_env_int("WEBTERM_PORT", 8283)
 WEB_USER = os.getenv("WEBTERM_USER", "admin")
 WEB_PASS = os.getenv("WEBTERM_PASS", "adminpass")
