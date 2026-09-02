@@ -10,19 +10,10 @@ from aiogram import Bot, Dispatcher
 from ..config import (
     ADMIN_ID,
     BOT_TOKEN,
-    CHECK_INTERVAL,
-    COMMON_CHAT_ID,
-    COMMON_NETSCHOOL_LOGIN,
-    COMMON_NETSCHOOL_PASSWORD,
-    COMMON_NETSCHOOL_SCHOOL,
-    COMMON_NETSCHOOL_URL,
-    COMMON_TOPIC_ID,
     LOG_BOT_TOKEN,
-    SENT_GRADES_FILE,
 )
 from ..netschool.client import _close_all_netschool_sessions
-from ..netschool.notifier import GradeNotifier
-from ..storage import _default_exclude_titles_common, load_netschool_users
+from ..storage import load_netschool_users
 from . import runtime
 from .factory import create_tg_bot
 from .handlers import auth, diary, gallery, menu, settings
@@ -40,31 +31,6 @@ def register_handlers(dp: Dispatcher, bot: Bot) -> None:
     settings.register(dp, bot)
     gallery.register(dp, bot)
     auth.register(dp, bot)
-
-
-def build_common_notifier(log_bot: Optional[Bot]) -> Optional[GradeNotifier]:
-    """Общий чекер: КР/СР/лабораторные всего класса в групповой чат."""
-    if not (COMMON_NETSCHOOL_URL and COMMON_NETSCHOOL_SCHOOL and COMMON_NETSCHOOL_LOGIN and COMMON_NETSCHOOL_PASSWORD):
-        logger.info("ℹ️ Общий чекер отключён (нет NETSCHOOL_URL/SCHOOL/LOGIN/PASSWORD в .env)")
-        return None
-    if not COMMON_CHAT_ID:
-        logger.warning("⚠️ Общий чекер отключён: не задан NETSCHOOL_CHAT_ID (куда слать оценки)")
-        return None
-    return GradeNotifier(
-        netschool_url=COMMON_NETSCHOOL_URL,
-        netschool_login=COMMON_NETSCHOOL_LOGIN,
-        netschool_password=COMMON_NETSCHOOL_PASSWORD,
-        netschool_school=COMMON_NETSCHOOL_SCHOOL,
-        telegram_token=BOT_TOKEN,
-        telegram_chat_id=COMMON_CHAT_ID,
-        check_interval=CHECK_INTERVAL,
-        bot=None,
-        log_bot=log_bot,
-        admin_id=ADMIN_ID or None,
-        exclude_titles=set(_default_exclude_titles_common()),
-        sent_grades_file=str(SENT_GRADES_FILE),
-        message_thread_id=COMMON_TOPIC_ID,
-    )
 
 
 async def run_bot() -> None:
@@ -101,11 +67,6 @@ async def run_bot() -> None:
     tasks: list[asyncio.Task] = [
         asyncio.create_task(dp.start_polling(bot, skip_updates=True), name="Polling"),
     ]
-
-    common_notifier = build_common_notifier(log_bot)
-    if common_notifier:
-        tasks.append(asyncio.create_task(common_notifier.run(), name="NetSchoolCommon"))
-        logger.info("✅ Общий чекер оценок запущен")
 
     await start_all_user_grade_tasks(bot, log_bot, ADMIN_ID or None)
     tasks.extend(netschool_user_tasks.values())

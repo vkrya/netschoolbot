@@ -89,14 +89,9 @@ TELEGRAM_API_PROXY = (
     os.getenv("TELEGRAM_API_PROXY") or os.getenv("ALL_PROXY") or os.getenv("HTTPS_PROXY") or ""
 ).strip()
 
-# ============= ОБЩИЙ ЧЕКЕР (в группу) =============
-# Остаётся и здесь: общий мониторинг КР/СР/лабораторных для класса.
-COMMON_NETSCHOOL_URL = (os.getenv("NETSCHOOL_URL") or "").strip()
-COMMON_NETSCHOOL_LOGIN = (os.getenv("NETSCHOOL_LOGIN") or "").strip()
-COMMON_NETSCHOOL_PASSWORD = os.getenv("NETSCHOOL_PASSWORD") or ""
-COMMON_NETSCHOOL_SCHOOL = (os.getenv("NETSCHOOL_SCHOOL") or "").strip()
-COMMON_CHAT_ID = (os.getenv("NETSCHOOL_CHAT_ID") or os.getenv("TELEGRAM_CHAT_ID") or "").strip()
-COMMON_TOPIC_ID = get_env_int("TG_TOPIC_GRADES_ID", 0) or None
+# ============= ПРОВЕРКА ОЦЕНОК =============
+# Ни школы, ни URL по умолчанию здесь нет: каждый пользователь выбирает
+# свой регион и школу при /login. Общий чекер класса живёт в max_tg_forw_sch.
 CHECK_INTERVAL = get_env_int("CHECK_INTERVAL", 300)
 
 # ============= ВЕБ / PWA =============

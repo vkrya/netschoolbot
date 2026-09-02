@@ -141,8 +141,8 @@ def login_required(f):
 def register_root_redirect() -> None:
     """Корень домена ведёт в мини-приложение (панель живёт на другом хосте)."""
 
-    @app.route("/")
-    def index():
+    @app.route("/", endpoint="miniapp_root")
+    def miniapp_root():
         return redirect(MINIAPP_PATH)
 
 

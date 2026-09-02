@@ -97,6 +97,36 @@ async def stop_user_grade_task(user_id: int) -> None:
             pass
     await _close_netschool_session_for_user(user_id)
 
+async def _prompt_user_to_finish_setup(user_id: int, what: str) -> None:
+    """Сообщить пользователю, что нужно доввести настройки — ровно один раз.
+
+    Раньше пустые регион и школа подменялись глобальными значениями из .env,
+    поэтому часть людей никогда их не выбирала. Теперь подстановки нет, и без
+    подсказки такой пользователь просто перестал бы получать оценки молча.
+    """
+    user_data = get_netschool_user(user_id)
+    if user_data.get("setup_prompt_sent"):
+        return
+    target_bot = runtime.bot
+    if not target_bot:
+        return
+    try:
+        await target_bot.send_message(
+            user_id,
+            "⚠️ <b>Нужно выбрать школу заново</b>\n\n"
+            f"Не заполнено: {what}.\n"
+            "Раньше подставлялись общие настройки, теперь каждый указывает свою школу сам.\n\n"
+            "Нажмите /login, выберите регион и школу — уведомления об оценках возобновятся.",
+            parse_mode="HTML",
+        )
+        user_data["setup_prompt_sent"] = True
+        user_data["updated_at"] = datetime.now().isoformat()
+        save_netschool_users()
+        logger.info(f"📨 Пользователю {user_id} отправлена просьба выбрать школу ({what})")
+    except Exception as exc:
+        logger.warning(f"Не удалось предупредить пользователя {user_id} о настройке школы: {exc}")
+
+
 async def start_user_grade_task(user_id: int, bot: Optional[Bot], log_bot: Optional[Bot], admin_id: Optional[int]) -> None:
     existing_task = netschool_user_tasks.get(user_id)
     if existing_task:
@@ -123,10 +153,16 @@ async def start_user_grade_task(user_id: int, bot: Optional[Bot], log_bot: Optio
     user_login_type = user_data.get("login_type", "password")
     if not user_url:
         logger.warning(f"⚠️ NetSchool URL не настроен для пользователя {user_id}")
+        await _prompt_user_to_finish_setup(user_id, "регион (адрес «Сетевого города»)")
         return
     if user_login_type not in ("esia", "esia_qr") and not user_school:
         logger.warning(f"⚠️ NetSchool School не настроена для пользователя {user_id}")
+        await _prompt_user_to_finish_setup(user_id, "школа")
         return
+
+    # Настройки на месте — подсказку можно будет показать снова, если что-то отвалится
+    if user_data.get("setup_prompt_sent"):
+        user_data["setup_prompt_sent"] = False
 
     interval = _clamp_interval(int(user_data.get("check_interval") or CHECK_INTERVAL))
     user_data["check_interval"] = interval
