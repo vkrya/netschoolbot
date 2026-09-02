@@ -3,6 +3,7 @@ aiogram>=3.0.0
 python-dotenv>=1.0.0
 aiohttp>=3.9.0
 httpx[socks]
+aiohttp-socks>=0.8.0
 requests
 qrcode[pil]>=7.0
 Pillow
