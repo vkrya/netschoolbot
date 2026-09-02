@@ -94,6 +94,11 @@ TELEGRAM_API_PROXY = (
 # свой регион и школу при /login. Общий чекер класса живёт в max_tg_forw_sch.
 CHECK_INTERVAL = get_env_int("CHECK_INTERVAL", 300)
 
+# ============= ВХОД ЧЕРЕЗ ГОСУСЛУГИ =============
+# QR-код Госуслуг живёт около минуты: по истечении срока показываем, что он
+# устарел, и предлагаем сгенерировать новый.
+QR_LOGIN_TTL = max(15, get_env_int("NETSCHOOL_QR_TTL", 60))
+
 # ============= ВЕБ / PWA =============
 PUBLIC_BASE_URL = (os.getenv("NETSCHOOL_PUBLIC_URL") or "https://netschool.ikrya.ru").strip().rstrip("/")
 MINIAPP_PATH = (os.getenv("NETSCHOOL_MINIAPP_PATH") or "/mini/netschool").strip()
