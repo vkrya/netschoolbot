@@ -71,7 +71,6 @@ class WebSettings:
     port: int
     public_url: str
     miniapp_path: str
-    session_secret: str
     token_ttl: int
     login_code_ttl: int
     cache_fresh_seconds: int
@@ -171,15 +170,12 @@ def load_settings(*, require_bot_token: bool = True) -> Settings:
     public_url = (_env("NETSCHOOL_PUBLIC_URL") or "https://netschool.ikrya.ru").rstrip("/")
     miniapp_path = "/" + _env("NETSCHOOL_MINIAPP_PATH", "/mini/netschool").strip("/")
 
-    session_secret = _env("NETSCHOOL_WEB_SECRET")
+    # Секрета для подписи сессий здесь нет намеренно. Он был нужен Flask,
+    # который подписывал им cookie сессии; в текущем веб-слое авторизация
+    # построена на токенах мини-приложения, и подписанных сессий нет вовсе.
+    # Требовать его — значит не пускать приложение стартовать из-за
+    # настройки, которая ни на что не влияет.
     web_enabled = _env_bool("NETSCHOOL_WEB_ENABLED", True)
-    if web_enabled and not session_secret:
-        # Прежний код имел дефолт "…-change-me", который жил в продакшене.
-        # Лучше отказаться стартовать, чем молча подписывать сессии известным ключом.
-        raise SettingsError(
-            "NETSCHOOL_WEB_SECRET не задан. Сгенерируйте: "
-            "python -c \"import secrets; print(secrets.token_urlsafe(48))\""
-        )
 
     check_interval = _env_int("CHECK_INTERVAL", 300)
     if not MIN_CHECK_INTERVAL <= check_interval <= MAX_CHECK_INTERVAL:
@@ -204,7 +200,6 @@ def load_settings(*, require_bot_token: bool = True) -> Settings:
             port=_env_int("NETSCHOOL_WEB_PORT", 8283),
             public_url=public_url,
             miniapp_path=miniapp_path,
-            session_secret=session_secret,
             token_ttl=_env_int("NETSCHOOL_MINIAPP_TOKEN_TTL", 900),
             login_code_ttl=_env_int("NETSCHOOL_LOGIN_CODE_TTL", 600),
             cache_fresh_seconds=max(60, _env_int("NETSCHOOL_CACHE_FRESH_SECONDS", 3600)),

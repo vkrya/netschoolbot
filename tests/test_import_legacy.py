@@ -261,7 +261,7 @@ def _settings_for(data_dir):
         telegram=TelegramSettings(bot_token="t", admin_id=0),
         web=WebSettings(
             enabled=False, host="127.0.0.1", port=8283, public_url="https://x",
-            miniapp_path="/mini", session_secret="s", token_ttl=900,
+            miniapp_path="/mini", token_ttl=900,
             login_code_ttl=600, cache_fresh_seconds=3600,
         ),
         push=PushSettings(public_key="", private_key="", subject=""),

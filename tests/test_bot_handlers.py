@@ -79,7 +79,7 @@ async def app(db, users, marks, sessions, miniapp, cache):
         web=WebSettings(
             enabled=True, host="127.0.0.1", port=8283,
             public_url="https://example.ru", miniapp_path="/mini",
-            session_secret="s", token_ttl=900, login_code_ttl=600,
+            token_ttl=900, login_code_ttl=600,
             cache_fresh_seconds=3600,
         ),
         push=PushSettings(public_key="", private_key="", subject=""),
