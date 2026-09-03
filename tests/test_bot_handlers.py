@@ -390,3 +390,41 @@ class TestTelegramNotifier:
 
 async def _no_sleep(_seconds):
     return None
+
+
+class TestPushDelivery:
+    class Push:
+        def __init__(self, error=None):
+            self.sent = []
+            self.error = error
+
+        async def send(self, telegram_id, title, body, url=""):
+            if self.error:
+                raise self.error
+            self.sent.append((telegram_id, title, body))
+            return 1
+
+    async def test_push_accompanies_telegram(self, users):
+        bot = TestTelegramNotifier.Bot()
+        push = self.Push()
+        user = await users.save(make_user())
+        notifier = TelegramNotifier(bot, users, push)
+        await notifier.send_mark_events(user, [MarkEvent(MarkKind.NEW, record())])
+        assert len(bot.sent) == 1
+        assert len(push.sent) == 1
+
+    async def test_push_failure_does_not_break_telegram(self, users):
+        bot = TestTelegramNotifier.Bot()
+        push = self.Push(error=RuntimeError("сервис push недоступен"))
+        user = await users.save(make_user())
+        notifier = TelegramNotifier(bot, users, push)
+        await notifier.send_mark_events(user, [MarkEvent(MarkKind.NEW, record())])
+        # Telegram-сообщение ушло, несмотря на сбой push.
+        assert len(bot.sent) == 1
+
+    async def test_no_push_configured_is_fine(self, users):
+        bot = TestTelegramNotifier.Bot()
+        user = await users.save(make_user())
+        notifier = TelegramNotifier(bot, users, None)
+        await notifier.send_mark_events(user, [MarkEvent(MarkKind.NEW, record())])
+        assert len(bot.sent) == 1

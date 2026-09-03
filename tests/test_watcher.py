@@ -68,6 +68,29 @@ class FakeDiary:
             raise self.error
         return list(self.marks)
 
+    async def fetch_diary(self, user, **kwargs):
+        """Дни дневника, собранные из заданных оценок и заданий."""
+        from app.domain.records import DiaryDay
+
+        if self.error:
+            raise self.error
+        days: dict = {}
+        for item in self.marks:
+            days.setdefault(item.date, DiaryDay(day=item.date)).marks.append(item)
+        for item in self.homework:
+            days.setdefault(item.due_date, DiaryDay(day=item.due_date)).homework.append(item)
+        return [days[key] for key in sorted(days)]
+
+    async def fetch_mail(self, user, limit=20):
+        if self.error:
+            raise self.error
+        return []
+
+    async def download_attachment(self, user, attachment_id):
+        if self.error:
+            raise self.error
+        return b""
+
     async def fetch_homework(self, user, **kwargs):
         if self.error:
             raise self.error

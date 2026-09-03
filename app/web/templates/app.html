@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0d1117">
+<title>{{ school or "Сетевой город" }}</title>
+<link rel="manifest" href="{{ base }}/manifest.webmanifest?token={{ token }}">
+<link rel="icon" href="{{ base }}/static/icon.svg">
+<link rel="apple-touch-icon" href="{{ base }}/static/icon.svg">
+<link rel="stylesheet" href="{{ base }}/static/app.css?v={{ version }}">
+</head>
+<body>
+<header class="top">
+  <div class="who">
+    <strong id="student">{{ student or "Дневник" }}</strong>
+    <span id="school">{{ school }}</span>
+  </div>
+  <button id="refresh" class="icon" title="Обновить" aria-label="Обновить">⟳</button>
+</header>
+
+<div id="banner" class="banner" hidden></div>
+
+<main>
+  <section id="view-diary" class="view"></section>
+  <section id="view-marks" class="view" hidden></section>
+  <section id="view-homework" class="view" hidden></section>
+  <section id="view-settings" class="view" hidden></section>
+</main>
+
+<nav class="tabs">
+  <button data-view="diary" class="active">📅<span>Дневник</span></button>
+  <button data-view="marks">📊<span>Оценки</span></button>
+  <button data-view="homework">📚<span>Домашка</span></button>
+  <button data-view="settings">⚙️<span>Ещё</span></button>
+</nav>
+
+<script>
+  window.NETSCHOOL = {
+    base: {{ base | tojson }},
+    token: {{ token | tojson }},
+    pushEnabled: {{ push_enabled | tojson }}
+  };
+</script>
+<script src="{{ base }}/static/app.js?v={{ version }}"></script>
+</body>
+</html>

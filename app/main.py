@@ -89,7 +89,12 @@ async def run(settings: Settings, args: argparse.Namespace) -> int:
     context = await AppContext.create(settings)
     # Уведомитель знает про бота, а бот создаётся позже реестра проверок.
     # Явная привязка вместо ленивых импортов внутри функций.
-    context.watchers.attach_notifier(TelegramNotifier(bot, context.users))
+    from .web.push import PushSender
+
+    push = PushSender(settings.push, context.miniapp)
+    if not push.configured:
+        logger.info("VAPID-ключи не заданы — push в браузер отключён")
+    context.watchers.attach_notifier(TelegramNotifier(bot, context.users, push))
 
     tasks: list[asyncio.Task] = [
         asyncio.create_task(cleanup_sessions(context), name="session-cleanup")
