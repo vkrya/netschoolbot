@@ -2,28 +2,47 @@
 
 Один источник правды: dataclass, собираемый из окружения ровно один раз при
 старте. В отличие от старого `config.py`, здесь нет модуля-с-константами,
-который каждый импортёр переименовывает под себя, и есть валидация: если
-обязательного значения нет или оно бессмысленное — процесс не стартует
-с невнятной ошибкой на первом запросе, а падает сразу и по делу.
+который каждый импортёр переименовывает под себя.
+
+Отношение к некорректным значениям намеренно снисходительное: странное
+значение подменяется значением по умолчанию с записью в лог, и только
+отсутствие токена бота останавливает запуск. Причина в том, что служба
+живёт на сервере с рукописным .env, который переживает обновления
+приложения: отказ стартовать означает не «безопасно», а «бот лежит, пока
+кто-нибудь не зайдёт по SSH».
 """
 
 from __future__ import annotations
 
+import logging
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
 
 from dotenv import load_dotenv
 
-BASE_DIR = Path(__file__).resolve().parent.parent
+logger = logging.getLogger("netschoolbot.settings")
 
 from .domain.models import MAX_CHECK_INTERVAL, MIN_CHECK_INTERVAL
+
+BASE_DIR = Path(__file__).resolve().parent.parent
 
 MSK_UTC_OFFSET_HOURS = 3
 
 
 class SettingsError(RuntimeError):
-    """Конфигурация непригодна для запуска."""
+    """Конфигурация непригодна для запуска.
+
+    Поднимается только тогда, когда работать действительно нечем — по сути,
+    при отсутствии токена бота. Всё остальное чинится подстановкой значения
+    по умолчанию с записью в лог.
+
+    Так сделано не из вкуса к снисходительности. Служба живёт на сервере с
+    рукописным .env, который переживает обновления приложения. Отказ
+    стартовать из-за подозрительного значения означает не «безопасно», а
+    «бот молча лежит, пока кто-нибудь не зайдёт по SSH» — что уже
+    случилось из-за настройки, которая ни на что не влияла.
+    """
 
 
 def _env(key: str, default: str = "") -> str:
@@ -40,8 +59,9 @@ def _env_int(key: str, default: int) -> int:
         return default
     try:
         return int(raw)
-    except ValueError as exc:
-        raise SettingsError(f"{key}={raw!r} — ожидалось целое число") from exc
+    except ValueError:
+        logger.warning("%s=%r — не число, беру значение по умолчанию %s", key, raw, default)
+        return default
 
 
 def _env_bool(key: str, default: bool) -> bool:
@@ -52,7 +72,8 @@ def _env_bool(key: str, default: bool) -> bool:
         return True
     if raw in {"0", "false", "no", "off"}:
         return False
-    raise SettingsError(f"{key}={raw!r} — ожидалось да/нет (1/0, true/false)")
+    logger.warning("%s=%r — не да/нет, беру значение по умолчанию %s", key, raw, default)
+    return default
 
 
 @dataclass(frozen=True, slots=True)
@@ -71,7 +92,6 @@ class WebSettings:
     port: int
     public_url: str
     miniapp_path: str
-    session_secret: str
     token_ttl: int
     login_code_ttl: int
     cache_fresh_seconds: int
@@ -150,7 +170,8 @@ def _parse_proxy_hosts(raw: str, volgograd_proxy: str) -> dict[str, str]:
         host, _, proxy = chunk.partition("=")
         host = host.strip()
         if not host:
-            raise SettingsError(f"NETSCHOOL_PROXY_HOSTS: пустое имя хоста в {chunk!r}")
+            logger.warning("NETSCHOOL_PROXY_HOSTS: пропускаю запись без имени хоста: %r", chunk)
+            continue
         hosts[host] = proxy.strip()
     return hosts
 
@@ -171,22 +192,23 @@ def load_settings(*, require_bot_token: bool = True) -> Settings:
     public_url = (_env("NETSCHOOL_PUBLIC_URL") or "https://netschool.ikrya.ru").rstrip("/")
     miniapp_path = "/" + _env("NETSCHOOL_MINIAPP_PATH", "/mini/netschool").strip("/")
 
-    session_secret = _env("NETSCHOOL_WEB_SECRET")
+    # Секрета для подписи сессий здесь нет намеренно. Он был нужен Flask,
+    # который подписывал им cookie сессии; в текущем веб-слое авторизация
+    # построена на токенах мини-приложения, и подписанных сессий нет вовсе.
+    # Требовать его — значит не пускать приложение стартовать из-за
+    # настройки, которая ни на что не влияет.
     web_enabled = _env_bool("NETSCHOOL_WEB_ENABLED", True)
-    if web_enabled and not session_secret:
-        # Прежний код имел дефолт "…-change-me", который жил в продакшене.
-        # Лучше отказаться стартовать, чем молча подписывать сессии известным ключом.
-        raise SettingsError(
-            "NETSCHOOL_WEB_SECRET не задан. Сгенерируйте: "
-            "python -c \"import secrets; print(secrets.token_urlsafe(48))\""
-        )
 
     check_interval = _env_int("CHECK_INTERVAL", 300)
-    if not MIN_CHECK_INTERVAL <= check_interval <= MAX_CHECK_INTERVAL:
-        raise SettingsError(
-            f"CHECK_INTERVAL={check_interval} вне допустимых "
-            f"{MIN_CHECK_INTERVAL}..{MAX_CHECK_INTERVAL} секунд"
+    clamped = max(MIN_CHECK_INTERVAL, min(MAX_CHECK_INTERVAL, check_interval))
+    if clamped != check_interval:
+        # Слишком частые проверки банит уже школьный сервер, но это не повод
+        # не запускать бота: подрезаем до допустимого и говорим об этом.
+        logger.warning(
+            "CHECK_INTERVAL=%s вне допустимых %s..%s — использую %s",
+            check_interval, MIN_CHECK_INTERVAL, MAX_CHECK_INTERVAL, clamped,
         )
+        check_interval = clamped
 
     return Settings(
         data_dir=data_dir,
@@ -204,7 +226,6 @@ def load_settings(*, require_bot_token: bool = True) -> Settings:
             port=_env_int("NETSCHOOL_WEB_PORT", 8283),
             public_url=public_url,
             miniapp_path=miniapp_path,
-            session_secret=session_secret,
             token_ttl=_env_int("NETSCHOOL_MINIAPP_TOKEN_TTL", 900),
             login_code_ttl=_env_int("NETSCHOOL_LOGIN_CODE_TTL", 600),
             cache_fresh_seconds=max(60, _env_int("NETSCHOOL_CACHE_FRESH_SECONDS", 3600)),
