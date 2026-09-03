@@ -1,0 +1,70 @@
+"""Тесты классификации ошибок.
+
+Раньше пять разных предикатов в трёх модулях расходились в трактовке одной
+и той же ошибки: бот считал её временной, PWA — фатальной.
+"""
+
+import pytest
+
+from app.netschool.errors import NetSchoolError, Reason, classify, wrap
+
+
+class TestClassify:
+    @pytest.mark.parametrize(
+        "message,expected",
+        [
+            ("401 Unauthorized", Reason.AUTH),
+            ("Session expired", Reason.AUTH),
+            ("Пользователь не авторизован", Reason.AUTH),
+            ("403 Forbidden", Reason.AUTH),
+            ("Read timeout", Reason.SERVER_UNAVAILABLE),
+            ("503 Service Unavailable", Reason.SERVER_UNAVAILABLE),
+            ("All connection attempts failed", Reason.SERVER_UNAVAILABLE),
+            ("Server disconnected", Reason.SERVER_UNAVAILABLE),
+            ("429 Too Many Requests", Reason.RATE_LIMIT),
+            ("ESIA login failed", Reason.ESIA),
+            ("Госуслуги недоступны", Reason.ESIA),
+            ("Что-то пошло не так", Reason.UNKNOWN),
+        ],
+    )
+    def test_by_message(self, message, expected):
+        assert classify(Exception(message)) is expected
+
+    def test_esia_timeout_is_esia_not_server(self):
+        # Текст содержит и "esia", и "timeout" — реагировать надо как на ЕСИА.
+        assert classify(Exception("ESIA request timeout")) is Reason.ESIA
+
+    def test_rate_limit_wins_over_auth(self):
+        # 429 с упоминанием авторизации — это всё равно «подождать».
+        assert classify(Exception("429 too many requests, unauthorized")) is Reason.RATE_LIMIT
+
+    def test_builtin_connection_errors(self):
+        assert classify(ConnectionRefusedError()) is Reason.SERVER_UNAVAILABLE
+        assert classify(TimeoutError()) is Reason.SERVER_UNAVAILABLE
+
+
+class TestReasonBehaviour:
+    def test_only_transient_reasons_retry(self):
+        retryable = {r for r in Reason if r.is_retryable}
+        assert retryable == {Reason.SERVER_UNAVAILABLE, Reason.RATE_LIMIT}
+
+    def test_auth_requires_relogin(self):
+        assert Reason.AUTH.needs_relogin is True
+        assert Reason.SERVER_UNAVAILABLE.needs_relogin is False
+
+
+class TestWrap:
+    def test_message_is_human_readable(self):
+        error = wrap(Exception("401 Unauthorized"))
+        assert error.reason is Reason.AUTH
+        # Ни кода ошибки, ни traceback в тексте для пользователя.
+        assert "401" not in error.user_message
+        assert "/login" in error.user_message
+
+    def test_original_exception_is_kept(self):
+        original = Exception("503")
+        assert wrap(original).cause is original
+
+    def test_already_wrapped_passes_through(self):
+        error = NetSchoolError(Reason.MFA, "нужен код")
+        assert wrap(error) is error

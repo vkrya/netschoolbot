@@ -1,4 +1,4 @@
-name: Deploy NetSchool Bot to VPS
+name: Развёртывание на VPS
 
 on:
   workflow_dispatch:
@@ -27,7 +27,26 @@ jobs:
             git fetch origin main
             git reset --hard origin/main
             /opt/netschoolbot/venv/bin/pip install -q -r requirements.txt
+
+            # Юнит systemd на сервере — копия файла из репозитория, и сам
+            # по себе он не обновляется. Без этой синхронизации изменение
+            # команды запуска в репозитории не доезжает до сервера, и
+            # служба перезапускается со старой, уже несуществующей.
+            install -m 644 deploy/systemd/netschoolbot.service \
+              /etc/systemd/system/netschoolbot.service
+            systemctl daemon-reload
+
             systemctl restart netschoolbot
+
+            # Перезапуск возвращает управление сразу: проверяем, что служба
+            # действительно поднялась, иначе деплой отчитается об успехе
+            # при упавшем боте.
+            sleep 5
+            systemctl is-active --quiet netschoolbot || {
+              echo "Служба не поднялась:"
+              journalctl -u netschoolbot -n 40 --no-pager
+              exit 1
+            }
             echo "🚀 [GitHub Actions CI/CD] NetSchool bot deployed and restarted!"
 
       - name: 🤖 AI Verdict & Telegram Notification

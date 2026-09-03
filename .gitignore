@@ -14,3 +14,10 @@ venv/
 .venv/
 netschoolpy/
 .DS_Store
+
+# Новый проект
+.pytest_cache/
+__pycache__/
+*.sqlite3
+*.sqlite3-wal
+*.sqlite3-shm

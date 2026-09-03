@@ -1,17 +1,42 @@
 [Unit]
-Description=NetSchool Telegram bot + PWA (netschool.ikrya.ru)
+Description=Бот и мини-приложение «Сетевого города»
 After=network-online.target
 Wants=network-online.target
 
 [Service]
 Type=simple
 WorkingDirectory=/opt/netschoolbot
-Environment=PYTHONUNBUFFERED=1
-ExecStart=/opt/netschoolbot/venv/bin/python /opt/netschoolbot/run.py
+ExecStart=/opt/netschoolbot/venv/bin/python -m app.main
 Restart=always
-RestartSec=5
-KillSignal=SIGTERM
-TimeoutStopSec=30
+RestartSec=10
+
+# Один процесс на бота и веб: отдельного веб-сервиса больше нет.
+Environment=PYTHONUNBUFFERED=1
+EnvironmentFile=-/opt/netschoolbot/.env
+
+# Ограничения доступа. Веб-терминал и файловый менеджер из проекта убраны,
+# поэтому процессу больше не нужен доступ ко всей файловой системе.
+#
+# Запуск от отдельного пользователя — следующий шаг, он требует ручных
+# действий на сервере и поэтому не включён здесь: автоматический деплой
+# упал бы на несуществующем пользователе. Когда будете готовы:
+#     useradd --system --home /opt/netschoolbot netschoolbot
+#     chown -R netschoolbot:netschoolbot /opt/netschoolbot
+# и раскомментируйте две строки ниже.
+# User=netschoolbot
+# Group=netschoolbot
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+RestrictNamespaces=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+ReadWritePaths=/opt/netschoolbot/data
 
 [Install]
 WantedBy=multi-user.target
