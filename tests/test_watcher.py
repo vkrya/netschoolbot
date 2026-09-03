@@ -61,6 +61,7 @@ class FakeDiary:
         self.error: Exception | None = None
         self.week_error: Exception | None = None
         self.week_queries = 0
+        self.logged_out = False
 
     async def fetch_marks(self, user, **kwargs):
         if self.error:
@@ -71,6 +72,9 @@ class FakeDiary:
         if self.error:
             raise self.error
         return list(self.homework)
+
+    async def logout(self, user):
+        self.logged_out = True
 
     async def marks_present_in_week(self, user, week_day):
         self.week_queries += 1

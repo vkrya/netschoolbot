@@ -208,7 +208,7 @@ class WatcherRegistry:
         users: UserRepository,
         state: MarkStateRepository,
         diary: DiaryService,
-        notifier: Notifier,
+        notifier: Notifier | None = None,
     ) -> None:
         self._users = users
         self._state = state
@@ -217,8 +217,22 @@ class WatcherRegistry:
         self._tasks: dict[int, asyncio.Task] = {}
         self._lock = asyncio.Lock()
 
+    def attach_notifier(self, notifier: Notifier) -> None:
+        """Задать способ доставки уведомлений.
+
+        Отдельный шаг нужен потому, что уведомитель знает про Telegram-бота,
+        а бот создаётся позже реестра. Раньше этот круг разрывали ленивыми
+        импортами внутри функций, из-за чего порядок инициализации был
+        неявным и ломался при малейшей перестановке.
+        """
+        self._notifier = notifier
+
     async def start(self, user_id: int) -> None:
         """Запустить проверку. Повторный вызов перезапускает её."""
+        if self._notifier is None:
+            raise RuntimeError(
+                "Уведомитель не задан: вызовите WatcherRegistry.attach_notifier()"
+            )
         async with self._lock:
             await self._cancel(user_id)
             watcher = UserWatcher(
