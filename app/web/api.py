@@ -19,6 +19,7 @@ from ..domain import formatting
 from ..domain.models import User, normalize
 from ..domain.records import DiaryDay
 from ..netschool.errors import NetSchoolError, Reason
+from ..domain.periods import current_quarter, quarter_of
 from ..netschool.service import msk_today
 from .telegram_auth import InitDataError, verify_init_data
 
@@ -145,30 +146,52 @@ async def auth_middleware(request: web.Request, handler):
     return response
 
 
+def _mark_to_json(record) -> dict:
+    return {
+        "subject": record.subject,
+        "title": record.title,
+        "type": record.assignment_type,
+        "date": record.date.isoformat(),
+        "mark": record.mark,
+        "weight": record.weight,
+        "numeric": record.numeric_mark,
+        # Четверть считается на сервере: правила одни и те же для бота и
+        # приложения, дублировать их в JavaScript незачем.
+        "quarter": quarter_of(record.date),
+    }
+
+
+def _homework_to_json(item) -> dict:
+    return {
+        "subject": item.subject,
+        "date": item.due_date.isoformat(),
+        "type": item.assignment_type,
+        "text": item.text,
+        "attachments": [{"id": a.id, "name": a.name} for a in item.attachments],
+    }
+
+
 def _day_to_json(day: DiaryDay) -> dict:
     return {
         "date": day.day.isoformat(),
         "label": formatting.date_label(day.day),
-        "marks": [
+        "weekday": day.day.weekday(),
+        "lessons": [
             {
-                "subject": record.subject,
-                "title": record.title,
-                "mark": record.mark,
-                "weight": record.weight,
-                "numeric": record.numeric_mark,
+                "number": lesson.number,
+                "subject": lesson.subject,
+                "time": lesson.time_range,
+                "start": lesson.start,
+                "end": lesson.end,
+                "room": lesson.room,
+                "teacher": lesson.teacher,
+                "marks": [_mark_to_json(m) for m in lesson.marks],
+                "homework": [_homework_to_json(h) for h in lesson.homework],
             }
-            for record in day.marks
+            for lesson in day.lessons
         ],
-        "homework": [
-            {
-                "subject": item.subject,
-                "text": item.text,
-                "attachments": [
-                    {"id": a.id, "name": a.name} for a in item.attachments
-                ],
-            }
-            for item in day.homework
-        ],
+        "marks": [_mark_to_json(record) for record in day.marks],
+        "homework": [_homework_to_json(item) for item in day.homework],
     }
 
 
@@ -226,11 +249,28 @@ async def profile(request: web.Request) -> web.Response:
 
 @routes.get("/api/diary")
 async def diary(request: web.Request) -> web.Response:
-    async def produce(app: AppContext, user: User):
-        days = await app.diary.fetch_diary(user, weeks_back=2, weeks_forward=2)
-        return {"days": [_day_to_json(day) for day in days]}
+    """Дневник вокруг запрошенной недели.
 
-    return await _cached(request, "diary", produce)
+    Отдаём не одну неделю, а окно из нескольких: переключение недель в
+    приложении должно быть мгновенным, а не ждать похода в школьный сервер
+    на каждое нажатие стрелки.
+    """
+    try:
+        offset = int(request.query.get("week", "0"))
+    except ValueError:
+        offset = 0
+    # Ограничение, чтобы случайный огромный параметр не заставил бота
+    # перебирать сотни недель.
+    offset = max(-30, min(30, offset))
+
+    async def produce(app: AppContext, user: User):
+        today = msk_today() + dt.timedelta(weeks=offset)
+        days = await app.diary.fetch_diary(user, weeks_back=1, weeks_forward=1, today=today)
+        return {"days": [_day_to_json(day) for day in days], "week": offset}
+
+    # Каждое окно кэшируется отдельно, иначе соседние недели вытесняли бы
+    # друг друга и стрелки снова упирались бы в сеть.
+    return await _cached(request, f"diary:{offset}", produce)
 
 
 @routes.get("/api/marks")
@@ -248,18 +288,18 @@ async def marks(request: web.Request) -> web.Response:
                     "subject": subject,
                     "average": formatting.weighted_average(items),
                     "count": len(items),
+                    # Общая функция, а не свой набор полей: своя копия уже
+                    # разошлась с остальными и потеряла четверть.
                     "marks": [
-                        {
-                            "date": r.date.isoformat(),
-                            "title": r.title,
-                            "mark": r.mark,
-                            "weight": r.weight,
-                        }
-                        for r in sorted(items, key=lambda r: r.date)
+                        _mark_to_json(r) for r in sorted(items, key=lambda r: r.date)
                     ],
                 }
             )
-        return {"subjects": subjects, "average": formatting.weighted_average(records)}
+        return {
+            "subjects": subjects,
+            "average": formatting.weighted_average(records),
+            "current_quarter": current_quarter(msk_today()),
+        }
 
     return await _cached(request, "marks", produce)
 
@@ -287,9 +327,23 @@ async def homework(request: web.Request) -> web.Response:
 @routes.get("/api/mail")
 async def mail(request: web.Request) -> web.Response:
     async def produce(app: AppContext, user: User):
-        return {"messages": await app.diary.fetch_mail(user)}
+        return {"messages": await app.diary.fetch_mail(user, limit=50)}
 
     return await _cached(request, "mail", produce)
+
+
+@routes.get("/api/mail/{message_id}")
+async def mail_message(request: web.Request) -> web.Response:
+    """Письмо целиком. Не кэшируется: открывают его по одному разу."""
+    try:
+        message_id = int(request.match_info["message_id"])
+    except ValueError:
+        return json_error("Некорректный номер письма")
+
+    app, user = context(request), current_user(request)
+    message = await app.diary.fetch_mail_message(user, message_id)
+    return web.json_response({"ok": True, "data": message})
+
 
 
 @routes.get("/api/attachment/{attachment_id}")

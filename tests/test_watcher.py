@@ -62,6 +62,7 @@ class FakeDiary:
         self.week_error: Exception | None = None
         self.week_queries = 0
         self.logged_out = False
+        self.message = None
 
     async def fetch_marks(self, user, **kwargs):
         if self.error:
@@ -85,6 +86,11 @@ class FakeDiary:
         if self.error:
             raise self.error
         return []
+
+    async def fetch_mail_message(self, user, message_id):
+        if self.error:
+            raise self.error
+        return self.message or {}
 
     async def download_attachment(self, user, attachment_id):
         if self.error:

@@ -12,7 +12,15 @@ import logging
 import re
 from typing import Any
 
-from ..domain.records import Attachment, DiaryDay, HomeworkRecord, MarkRecord, clean_content, extract_mark
+from ..domain.records import (
+    Attachment,
+    DiaryDay,
+    HomeworkRecord,
+    Lesson,
+    MarkRecord,
+    clean_content,
+    extract_mark,
+)
 
 logger = logging.getLogger("netschoolbot.netschool")
 
@@ -136,8 +144,49 @@ def _attachments(assignment: Any) -> tuple[Attachment, ...]:
     return tuple(result)
 
 
+def lessons_from_day(day: Any, *, today: dt.date | None = None) -> list[Lesson]:
+    """Расписание одного дня вместе с оценками и заданиями каждого урока.
+
+    Оценки и задания собираются здесь же, а не сопоставляются потом по
+    предмету: один предмет может стоять в дне дважды, и связать их обратно
+    по названию уже нельзя.
+    """
+    day_date = _as_date(_attr(day, "day"))
+    if day_date is None:
+        return []
+
+    all_marks = marks_from_day(day)
+    all_homework = homework_from_day(day, today=today)
+
+    lessons: list[Lesson] = []
+    for position, raw in enumerate(_attr(day, "lessons", []) or []):
+        subject = str(_attr(raw, "subject", "") or "—")
+        number = _safe_int(_attr(raw, "number"))
+        lessons.append(
+            Lesson(
+                number=number if number is not None else position + 1,
+                subject=subject,
+                start=_time_text(_attr(raw, "start")),
+                end=_time_text(_attr(raw, "end")),
+                room=str(_attr(raw, "room", "") or ""),
+                teacher=str(_attr(raw, "teacher", "") or ""),
+                marks=tuple(
+                    m for m in all_marks
+                    if m.subject == subject and m.lesson_number == number
+                ),
+                homework=tuple(
+                    h for h in all_homework
+                    if h.subject == subject and h.lesson_number == number
+                ),
+            )
+        )
+
+    lessons.sort(key=lambda item: (item.number or 0, item.start))
+    return lessons
+
+
 def diary_days(days: list[Any], *, today: dt.date | None = None) -> list[DiaryDay]:
-    """Собрать дни дневника с оценками и домашними заданиями."""
+    """Собрать дни дневника: расписание, оценки и домашние задания."""
     result: list[DiaryDay] = []
     for day in days:
         day_date = _as_date(_attr(day, "day"))
@@ -146,6 +195,7 @@ def diary_days(days: list[Any], *, today: dt.date | None = None) -> list[DiaryDa
         result.append(
             DiaryDay(
                 day=day_date,
+                lessons=lessons_from_day(day, today=today),
                 marks=marks_from_day(day),
                 homework=homework_from_day(day, today=today),
             )
