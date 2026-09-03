@@ -103,8 +103,26 @@ class TestMenu:
     async def test_greeting_before_login(self, app, users):
         user = await users.get_or_create(1)
         message = FakeMessage()
-        await menu.show_menu(message, user)
+        await menu.show_menu(message, user, app)
         assert "login" in message.texts
+
+    async def test_menu_has_no_app_button_before_login(self, app, users):
+        # Кнопка мини-приложения без выбранной школы вела бы в пустоту.
+        user = await users.get_or_create(1)
+        message = FakeMessage()
+        await menu.show_menu(message, user, app)
+        _, kwargs = message.answers[-1]
+        buttons = [b.text for row in kwargs["reply_markup"].keyboard for b in row]
+        assert not any("Дневник" in text for text in buttons)
+
+    async def test_menu_has_app_button_after_login(self, app, users):
+        user = await users.save(make_user())
+        message = FakeMessage()
+        await menu.show_menu(message, user, app)
+        _, kwargs = message.answers[-1]
+        rows = kwargs["reply_markup"].keyboard
+        assert rows[0][0].web_app is not None
+        assert "token=" in rows[0][0].web_app.url
 
     async def test_homework_requires_school(self, app, users):
         user = await users.get_or_create(1)
@@ -163,13 +181,31 @@ class TestMenu:
         await menu.statistics(message, user, app)
         assert "Статистика" in message.texts
 
-    async def test_miniapp_link_contains_token(self, app, users):
+    async def test_app_opens_as_telegram_mini_app(self, app, users):
+        """Кнопка должна открывать приложение внутри Telegram, а не в браузере."""
         user = await users.save(make_user())
         message = FakeMessage()
-        await menu.miniapp(message, user, app)
-        _, kwargs = message.answers[-1]
-        url = kwargs["reply_markup"].inline_keyboard[0][0].url
-        assert url.startswith("https://example.ru/mini?token=")
+        await menu.open_miniapp(message, user, app)
+        button = message.answers[-1][1]["reply_markup"].inline_keyboard[0][0]
+        assert button.web_app is not None
+        assert button.url is None
+        assert button.web_app.url.startswith("https://example.ru/mini/?token=")
+
+    async def test_install_link_is_a_plain_url(self, app, users):
+        """Установить приложение на домашний экран можно только из браузера,
+        поэтому здесь нужна обычная ссылка, а не кнопка Telegram."""
+        user = await users.save(make_user())
+        message = FakeMessage()
+        await menu.install_miniapp(message, user, app)
+        button = message.answers[-1][1]["reply_markup"].inline_keyboard[0][0]
+        assert button.web_app is None
+        assert button.url.startswith("https://example.ru/mini/?token=")
+
+    async def test_app_requires_school(self, app, users):
+        user = await users.get_or_create(1)
+        message = FakeMessage()
+        await menu.open_miniapp(message, user, app)
+        assert "/login" in message.texts
 
     async def test_app_reset_changes_token(self, app, users):
         user = await users.save(make_user())

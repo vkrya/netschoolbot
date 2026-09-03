@@ -22,6 +22,7 @@ from ..db.repositories import MarkStateRepository, UserRepository
 from ..domain.models import User
 from ..domain.records import HomeworkRecord, MarkEvent
 from ..netschool.errors import NetSchoolError, Reason
+from ..netschool.mapping import is_placeholder_name
 from ..netschool.service import DiaryService, msk_now
 from .diff import confirm_deletions, diff_homework, diff_marks
 
@@ -104,6 +105,7 @@ class UserWatcher:
         return float(user.check_interval)
 
     async def _check(self, user: User) -> None:
+        user = await self._refresh_student_if_needed(user)
         marks = await self._diary.fetch_marks(user)
         homework = await self._diary.fetch_homework(user)
 
@@ -150,6 +152,28 @@ class UserWatcher:
             await self._notifier.send_mark_events(user, result.events)
         if fresh_homework and user.notifications.homework:
             await self._notifier.send_homework(user, fresh_homework)
+
+    async def _refresh_student_if_needed(self, user: User) -> User:
+        """Подтянуть имя ученика, если в базе лежит заглушка.
+
+        Записи, созданные до исправления разбора `student/diary/init`,
+        хранят «Ученик <id>» вместо имени. Ждать, пока человек заново
+        пройдёт /login, значит не починить их никогда.
+        """
+        if not is_placeholder_name(user.student_name):
+            return user
+        try:
+            updated = await self._diary.sync_students(user)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            # Имя — украшение; ради него нельзя терять проверку оценок.
+            # Поэтому здесь широкий перехват, а не только NetSchoolError.
+            logger.debug("Не удалось обновить имя ученика %s: %s", user.telegram_id, exc)
+            return user
+        if updated.student_name != user.student_name:
+            logger.info("Имя ученика %s уточнено: %s", user.telegram_id, updated.student_name)
+        return updated
 
     async def _confirm_deletes(self, user: User, candidates: list) -> set[str]:
         """Проверить пропавшие оценки отдельным запросом за нужную неделю.

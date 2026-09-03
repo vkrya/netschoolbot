@@ -7,6 +7,7 @@
 
 import datetime as dt
 import json
+import re
 
 import pytest
 from aiohttp.test_utils import TestClient, TestServer
@@ -18,6 +19,11 @@ from app.web.server import create_app
 from tests.test_bot_handlers import app as app_context  # noqa: F401 — фикстура
 from tests.test_repositories import make_user
 from tests.test_watcher import record
+
+# Тот же префикс, что в настройках тестового контекста. Раньше тесты ходили
+# в корень, а страница строила ссылки от префикса — из-за этого полностью
+# нерабочее приложение проходило проверки.
+BASE = "/mini"
 
 
 @pytest.fixture
@@ -37,71 +43,133 @@ async def token(app_context, users):
 
 class TestAuth:
     async def test_api_without_token_is_rejected(self, client):
-        response = await client.get("/api/profile")
+        response = await client.get(f"{BASE}/api/profile")
         assert response.status == 401
         body = await response.json()
-        assert body["reason"] == "token"
+        assert body["reason"] == "auth"
         assert "/app" in body["error"]
 
     async def test_invalid_token_is_rejected(self, client):
-        response = await client.get("/api/profile", params={"token": "выдумка"})
+        response = await client.get(f"{BASE}/api/profile", params={"token": "выдумка"})
         assert response.status == 401
 
     async def test_valid_token_works(self, client, token):
-        response = await client.get("/api/profile", params={"token": token})
+        response = await client.get(f"{BASE}/api/profile", params={"token": token})
         assert response.status == 200
         assert (await response.json())["data"]["name"] == "Иванов И."
 
     async def test_token_accepted_in_header(self, client, token):
-        response = await client.get("/api/profile", headers={"X-Netschool-Token": token})
+        response = await client.get(f"{BASE}/api/profile", headers={"X-Netschool-Token": token})
         assert response.status == 200
 
     async def test_token_moves_into_cookie(self, client, token):
-        response = await client.get("/api/profile", params={"token": token})
+        response = await client.get(f"{BASE}/api/profile", params={"token": token})
         # Дальше токен не нужен в URL — он не утекает в историю и Referer.
         assert "netschool_token" in response.cookies
 
     async def test_revoked_token_stops_working(self, client, app_context, token):
         await app_context.miniapp.revoke_tokens(1)
         client.session.cookie_jar.clear()
-        response = await client.get("/api/profile", params={"token": token})
+        response = await client.get(f"{BASE}/api/profile", params={"token": token})
         assert response.status == 401
 
 
 class TestPages:
-    async def test_index_without_token_shows_hint(self, client):
-        response = await client.get("/")
-        assert response.status == 401
-        assert "Telegram" in await response.text()
+    async def test_index_renders_without_token(self, client):
+        """Страница обязана отдаваться и без токена.
+
+        Внутри Telegram токена в адресе нет: личность подтверждает
+        initData уже в браузере. Отказ на этом шаге закрыл бы вход
+        мини-приложением полностью.
+        """
+        response = await client.get(f"{BASE}/")
+        assert response.status == 200
+        assert "telegram-web-app.js" in await response.text()
 
     async def test_index_with_token_renders_app(self, client, token):
-        response = await client.get("/", params={"token": token})
+        response = await client.get(f"{BASE}/", params={"token": token})
         assert response.status == 200
         text = await response.text()
         assert "Иванов И." in text
         assert "app.js" in text
 
+    async def test_root_redirects_into_app_keeping_query(self, client, token):
+        # Ссылку открывают без завершающего слэша; потерять при переадресации
+        # токен означало бы показать «не удалось вас опознать».
+        response = await client.get("/", params={"token": token}, allow_redirects=False)
+        assert response.status == 302
+        assert response.headers["Location"] == f"{BASE}/?token={token}"
+
+    async def test_prefix_without_slash_redirects(self, client):
+        response = await client.get(BASE, allow_redirects=False)
+        assert response.status == 302
+        assert response.headers["Location"] == f"{BASE}/"
+
     async def test_manifest_keeps_token_in_start_url(self, client, token):
-        response = await client.get("/manifest.webmanifest", params={"token": token})
+        response = await client.get(f"{BASE}/manifest.webmanifest", params={"token": token})
         payload = await response.json(content_type=None)
         # Иначе установленное на экран приложение открывалось бы на
         # странице «ссылка недействительна».
         assert token in payload["start_url"]
 
     async def test_service_worker_allows_root_scope(self, client):
-        response = await client.get("/sw.js")
+        response = await client.get(f"{BASE}/sw.js")
         assert response.status == 200
-        assert response.headers["Service-Worker-Allowed"] == "/"
+        # Область видимости — префикс приложения, а не корень домена.
+        assert response.headers["Service-Worker-Allowed"] == f"{BASE}/"
 
     async def test_health(self, client):
         response = await client.get("/health")
         assert (await response.json())["ok"] is True
 
 
+class TestPageLinksResolve:
+    """Каждая ссылка, которую строит страница, обязана вести на живой ресурс.
+
+    Именно этой проверки не хватало: маршруты висели в корне, а страница
+    ссылалась на них от префикса, поэтому в браузере 404 отдавали и стили,
+    и скрипт, и все запросы данных — работал только пустой каркас. При этом
+    тесты, ходившие в корень напрямую, были зелёными.
+    """
+
+    @staticmethod
+    def _links(html: str) -> list[str]:
+        """Собрать из разметки все локальные адреса, которые запросит браузер."""
+        found = re.findall(r'(?:href|src)="([^"]+)"', html)
+        # Плюс базовый путь, от которого скрипт строит запросы к API.
+        base = re.search(r'base:\s*"([^"]+)"', html)
+        if base:
+            found.append(base.group(1) + "/api/profile")
+        return [link for link in found if link.startswith("/")]
+
+    async def test_every_asset_on_the_page_is_reachable(self, client, token):
+        page = await client.get(f"{BASE}/", params={"token": token})
+        links = self._links(await page.text())
+        # Защита от самообмана: если ссылок не нашлось, проверять нечего.
+        assert len(links) >= 4
+
+        for link in links:
+            response = await client.get(link, params={"token": token})
+            assert response.status == 200, f"{link} отдал {response.status}"
+
+    async def test_stylesheet_and_script_have_content(self, client, token):
+        for asset in ("app.css", "app.js"):
+            response = await client.get(f"{BASE}/static/{asset}")
+            assert response.status == 200
+            assert len(await response.text()) > 500, f"{asset} подозрительно пуст"
+
+    async def test_api_base_matches_mount_point(self, client, token):
+        page = await client.get(f"{BASE}/", params={"token": token})
+        base = re.search(r'base:\s*"([^"]+)"', await page.text()).group(1)
+        # Ровно то расхождение, из-за которого приложение не работало.
+        response = await client.get(f"{base}/api/profile", params={"token": token})
+        assert response.status == 200
+
+
 class TestData:
     async def test_diary(self, client, app_context, token):
         app_context.diary.marks = [record(0)]
-        response = await client.get("/api/diary", params={"token": token})
+        response = await client.get(f"{BASE}/api/diary", params={"token": token})
         assert response.status == 200
         assert (await response.json())["ok"] is True
 
@@ -111,7 +179,7 @@ class TestData:
             record(1, "3", subject="Алгебра"),
             record(2, "4", subject="Химия"),
         ]
-        response = await client.get("/api/marks", params={"token": token})
+        response = await client.get(f"{BASE}/api/marks", params={"token": token})
         data = (await response.json())["data"]
         algebra = next(s for s in data["subjects"] if s["subject"] == "Алгебра")
         assert algebra["count"] == 2
@@ -123,7 +191,7 @@ class TestData:
         app_context.diary.homework = [
             HomeworkRecord("Алгебра", dt.date(2026, 3, 3), "ДЗ", "Упр. 1")
         ]
-        response = await client.get("/api/homework", params={"token": token})
+        response = await client.get(f"{BASE}/api/homework", params={"token": token})
         items = (await response.json())["data"]["items"]
         assert items[0]["subject"] == "Алгебра"
 
@@ -131,7 +199,7 @@ class TestData:
 class TestErrors:
     async def test_school_error_is_json_not_html(self, client, app_context, token):
         app_context.diary.error = NetSchoolError(Reason.SERVER_UNAVAILABLE, "Школа не отвечает")
-        response = await client.get("/api/diary", params={"token": token})
+        response = await client.get(f"{BASE}/api/diary", params={"token": token})
         assert response.status == 503
         body = await response.json()
         assert body["ok"] is False
@@ -139,13 +207,13 @@ class TestErrors:
 
     async def test_auth_error_uses_401(self, client, app_context, token):
         app_context.diary.error = NetSchoolError(Reason.AUTH, "Войдите заново")
-        response = await client.get("/api/diary", params={"token": token})
+        response = await client.get(f"{BASE}/api/diary", params={"token": token})
         assert response.status == 401
         assert (await response.json())["reason"] == "auth"
 
     async def test_unexpected_error_does_not_leak_details(self, client, app_context, token):
         app_context.diary.error = ValueError("пароль в тексте исключения")
-        response = await client.get("/api/diary", params={"token": token})
+        response = await client.get(f"{BASE}/api/diary", params={"token": token})
         assert response.status == 500
         assert "пароль" not in await response.text()
 
@@ -153,20 +221,20 @@ class TestErrors:
 class TestCache:
     async def test_second_request_uses_cache(self, client, app_context, token):
         app_context.diary.marks = [record(0)]
-        await client.get("/api/marks", params={"token": token})
+        await client.get(f"{BASE}/api/marks", params={"token": token})
         # Школа отвалилась — но кэш свежий, ответ должен прийти как обычно.
         app_context.diary.error = NetSchoolError(Reason.SERVER_UNAVAILABLE, "лежит")
-        response = await client.get("/api/marks", params={"token": token})
+        response = await client.get(f"{BASE}/api/marks", params={"token": token})
         body = await response.json()
         assert response.status == 200
         assert body["stale"] is False
 
     async def test_stale_cache_served_when_school_is_down(self, client, app_context, token):
         app_context.diary.marks = [record(0)]
-        await client.get("/api/marks", params={"token": token})
+        await client.get(f"{BASE}/api/marks", params={"token": token})
         app_context.diary.error = NetSchoolError(Reason.SERVER_UNAVAILABLE, "лежит")
         # refresh обходит кэш по свежести, но при ошибке отдаётся сохранённое.
-        response = await client.get("/api/marks", params={"token": token, "refresh": "1"})
+        response = await client.get(f"{BASE}/api/marks", params={"token": token, "refresh": "1"})
         body = await response.json()
         assert response.status == 200
         assert body["stale"] is True
@@ -174,7 +242,7 @@ class TestCache:
 
     async def test_no_cache_and_school_down_is_an_error(self, client, app_context, token):
         app_context.diary.error = NetSchoolError(Reason.SERVER_UNAVAILABLE, "лежит")
-        response = await client.get("/api/marks", params={"token": token})
+        response = await client.get(f"{BASE}/api/marks", params={"token": token})
         assert response.status == 503
 
 
@@ -192,7 +260,7 @@ class TestStudentSwitch:
         await marks.replace_marks(1, {r.identity: TrackedMark(r)})
 
         response = await client.post(
-            "/api/student", params={"token": token}, json={"id": 11}
+            f"{BASE}/api/student", params={"token": token}, json={"id": 11}
         )
         assert response.status == 200
         assert (await users.get(1)).selected_student_id == 11
@@ -201,22 +269,22 @@ class TestStudentSwitch:
 
     async def test_unknown_student_is_rejected(self, client, users, token):
         await users.save(make_user(available_students=(Student(10, "А"),)))
-        response = await client.post("/api/student", params={"token": token}, json={"id": 99})
+        response = await client.post(f"{BASE}/api/student", params={"token": token}, json={"id": 99})
         assert response.status == 404
 
     async def test_missing_id_is_rejected(self, client, token):
-        response = await client.post("/api/student", params={"token": token}, json={})
+        response = await client.post(f"{BASE}/api/student", params={"token": token}, json={})
         assert response.status == 400
 
 
 class TestPush:
     async def test_key_unavailable_without_vapid(self, client, token):
-        response = await client.get("/api/push/key", params={"token": token})
+        response = await client.get(f"{BASE}/api/push/key", params={"token": token})
         assert response.status == 503
 
     async def test_subscribe_requires_complete_data(self, client, token):
         response = await client.post(
-            "/api/push/subscribe", params={"token": token}, json={"endpoint": "https://x"}
+            f"{BASE}/api/push/subscribe", params={"token": token}, json={"endpoint": "https://x"}
         )
         assert response.status == 400
 
@@ -225,13 +293,82 @@ class TestPush:
             "endpoint": "https://push.example/1",
             "keys": {"p256dh": "ключ", "auth": "секрет"},
         }
-        response = await client.post("/api/push/subscribe", params={"token": token}, json=payload)
+        response = await client.post(f"{BASE}/api/push/subscribe", params={"token": token}, json=payload)
         assert response.status == 200
         assert len(await app_context.miniapp.push_subscriptions(1)) == 1
 
         await client.post(
-            "/api/push/unsubscribe",
+            f"{BASE}/api/push/unsubscribe",
             params={"token": token},
             json={"endpoint": payload["endpoint"]},
         )
         assert await app_context.miniapp.push_subscriptions(1) == []
+
+
+class TestTelegramMiniApp:
+    """Вход мини-приложением: сервер опознаёт человека по подписанной
+    initData, без токена в адресе."""
+
+    @staticmethod
+    def init_data(telegram_id: int, token: str = "t"):
+        import hashlib
+        import hmac
+        import json as _json
+        import time
+        from urllib.parse import urlencode
+
+        fields = {
+            "auth_date": str(int(time.time())),
+            "user": _json.dumps({"id": telegram_id, "first_name": "Иван"}, separators=(",", ":")),
+        }
+        check = "\n".join(f"{k}={fields[k]}" for k in sorted(fields))
+        secret = hmac.new(b"WebAppData", token.encode(), hashlib.sha256).digest()
+        fields["hash"] = hmac.new(secret, check.encode(), hashlib.sha256).hexdigest()
+        return urlencode(fields)
+
+    async def test_init_data_alone_is_enough(self, client, users):
+        await users.save(make_user(student_name="Иванов И."))
+        response = await client.get(
+            f"{BASE}/api/profile",
+            headers={"X-Telegram-Init-Data": self.init_data(1)},
+        )
+        assert response.status == 200
+        assert (await response.json())["data"]["name"] == "Иванов И."
+
+    async def test_forged_init_data_is_rejected(self, client, users):
+        await users.save(make_user())
+        # Подпись чужим токеном — ровно попытка выдать себя за другого.
+        response = await client.get(
+            f"{BASE}/api/profile",
+            headers={"X-Telegram-Init-Data": self.init_data(1, token="чужой")},
+        )
+        assert response.status == 401
+
+    async def test_init_data_of_unknown_user_asks_to_login(self, client):
+        response = await client.get(
+            f"{BASE}/api/profile",
+            headers={"X-Telegram-Init-Data": self.init_data(777)},
+        )
+        assert response.status == 401
+        assert (await response.json())["reason"] == "login"
+
+    async def test_init_data_wins_over_token(self, client, users, app_context):
+        """Токен из ссылки не должен перебивать подписанную личность."""
+        await users.save(make_user(1, student_name="Первый"))
+        await users.save(make_user(2, student_name="Второй"))
+        other_token = await app_context.miniapp.issue_token(2)
+
+        response = await client.get(
+            f"{BASE}/api/profile",
+            params={"token": other_token},
+            headers={"X-Telegram-Init-Data": self.init_data(1)},
+        )
+        assert (await response.json())["data"]["name"] == "Первый"
+
+    async def test_attachment_accepts_init_data_in_query(self, client, users):
+        # Файл скачивает браузер обычной ссылкой — заголовок туда не положить.
+        await users.save(make_user())
+        response = await client.get(
+            f"{BASE}/api/attachment/1", params={"tgWebAppData": self.init_data(1)}
+        )
+        assert response.status == 200

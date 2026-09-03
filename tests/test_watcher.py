@@ -99,6 +99,10 @@ class FakeDiary:
     async def logout(self, user):
         self.logged_out = True
 
+    async def sync_students(self, user):
+        """По умолчанию список детей не меняется."""
+        return user
+
     async def marks_present_in_week(self, user, week_day):
         self.week_queries += 1
         if self.week_error:
@@ -374,3 +378,65 @@ class TestRegistry:
         await registry.stop_all()
         await registry.stop_all()
         assert registry.running == set()
+
+
+class TestStudentNameRefresh:
+    """Починка уже сохранённых заглушек вместо имени.
+
+    Записи, созданные до исправления разбора student/diary/init, хранят
+    «Ученик 583039». Сами они не обновятся: вход эти люди больше не проходят.
+    """
+
+    async def test_placeholder_is_refreshed(self, users, marks, diary, notifier):
+        from app.domain.models import Student
+        from app.notifications.watcher import UserWatcher
+
+        await users.save(make_user(student_name="Ученик 583039"))
+
+        async def sync(user):
+            from dataclasses import replace
+
+            return await users.save(
+                replace(
+                    user,
+                    student_name="Иванов Иван",
+                    available_students=(Student(583039, "Иванов Иван"),),
+                )
+            )
+
+        diary.sync_students = sync
+        watcher = UserWatcher(1, users=users, state=marks, diary=diary, notifier=notifier)
+        await watcher.run_once()
+        assert (await users.get(1)).student_name == "Иванов Иван"
+
+    async def test_real_name_is_left_alone(self, users, marks, diary, notifier):
+        from app.notifications.watcher import UserWatcher
+
+        await users.save(make_user(student_name="Петров Пётр"))
+        called = False
+
+        async def sync(user):
+            nonlocal called
+            called = True
+            return user
+
+        diary.sync_students = sync
+        watcher = UserWatcher(1, users=users, state=marks, diary=diary, notifier=notifier)
+        await watcher.run_once()
+        # Лишний запрос к школьному серверу на каждом круге не нужен.
+        assert called is False
+
+    async def test_failed_refresh_does_not_break_the_check(self, users, marks, diary, notifier):
+        from app.notifications.watcher import UserWatcher
+
+        await users.save(make_user(student_name=""))
+
+        async def sync(user):
+            raise NetSchoolError(Reason.SERVER_UNAVAILABLE, "школа лежит")
+
+        diary.sync_students = sync
+        diary.marks = [record(0)]
+        watcher = UserWatcher(1, users=users, state=marks, diary=diary, notifier=notifier)
+        await watcher.run_once()
+        # Проверка оценок всё равно прошла и состояние записано.
+        assert len(await marks.load_marks(1)) == 1

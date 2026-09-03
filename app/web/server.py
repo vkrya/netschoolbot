@@ -1,18 +1,19 @@
 """Веб-сервер мини-приложения.
 
-aiohttp вместо Flask + flask-socketio + eventlet в отдельном потоке. Смысл
-замены не в фреймворке, а в том, что теперь веб живёт в том же event loop,
-что и бот: они делят один пул сессий «Сетевого города» и одно соединение с
-базой, вместо того чтобы обмениваться данными через общие словари в памяти.
+aiohttp вместо Flask + flask-socketio + eventlet в отдельном потоке: веб
+живёт в том же event loop, что и бот, и они делят один пул сессий
+«Сетевого города» и одно соединение с базой.
 
-Панель управления (веб-терминал с PTY и файловый менеджер с корнем «/»)
-не переносится: она держала доступ к серверу за паролем со значением по
-умолчанию «adminpass».
+Всё приложение монтируется подприложением под своим префиксом (по
+умолчанию `/mini/netschool`). Это не косметика: страница строит ссылки на
+статику и API от этого префикса, и когда маршруты висели в корне, браузер
+получал 404 на CSS, JS и на каждый запрос данных — работал только голый
+HTML-каркас.
 """
 
 from __future__ import annotations
 
-import json
+import asyncio
 import logging
 import time
 from pathlib import Path
@@ -33,57 +34,101 @@ STATIC_DIR = Path(__file__).parent / "static"
 # Версия для обхода кэша браузера при обновлении статики.
 STATIC_VERSION = str(int(time.time()))
 
+page_routes = web.RouteTableDef()
+
 
 def create_app(context: AppContext, bot=None) -> web.Application:
-    app = web.Application(middlewares=[api.error_middleware, api.auth_middleware])
-    app[CONTEXT] = context
-    app[BOT] = bot
+    """Собрать сервер: подприложение под префиксом плюс проверка живости."""
+    inner = web.Application(middlewares=[api.error_middleware, api.auth_middleware])
+    inner[CONTEXT] = context
+    inner[BOT] = bot
 
     aiohttp_jinja2.setup(
-        app,
+        inner,
         loader=jinja2.FileSystemLoader(TEMPLATES_DIR),
-        autoescape=True,  # шаблоны экранируют по умолчанию
+        autoescape=True,
     )
 
-    app.add_routes(api.routes)
-    app.add_routes(page_routes)
-    app.router.add_static("/static", STATIC_DIR, name="static")
-    return app
+    inner.add_routes(api.routes)
+    inner.add_routes(page_routes)
+    inner.router.add_static("/static", STATIC_DIR, name="static")
+
+    prefix = context.settings.web.miniapp_path.rstrip("/")
+    if not prefix:
+        # Приложение отдаётся с корня домена — вложенность не нужна.
+        inner.router.add_get("/health", health)
+        return inner
+
+    outer = web.Application(middlewares=[_make_redirect_middleware(prefix)])
+    outer[CONTEXT] = context
+    outer.add_subapp(prefix, inner)
+
+    # Проверка живости остаётся в корне: ею пользуются systemd и мониторинг,
+    # которым незачем знать про префикс приложения.
+    outer.router.add_get("/health", health)
+    return outer
 
 
-page_routes = web.RouteTableDef()
+def _make_redirect_middleware(prefix: str):
+    """Переадресация на приложение с корня и с префикса без слэша.
+
+    Сделано middleware, а не маршрутом: `add_subapp` забирает себе весь
+    путь, начинающийся с префикса, поэтому обычный маршрут на `/mini`
+    до обработчика уже не доходит и отдаёт 404. А открывают ссылку люди
+    именно так — без завершающего слэша.
+    """
+
+    @web.middleware
+    async def redirect(request: web.Request, handler):
+        if request.path in ("/", prefix):
+            target = f"{prefix}/"
+            # Токен и данные Telegram живут в query: потерять их при
+            # переадресации означало бы «не удалось вас опознать».
+            if request.query_string:
+                target = f"{target}?{request.query_string}"
+            raise web.HTTPFound(target)
+        return await handler(request)
+
+    return redirect
+
+
+async def health(request: web.Request) -> web.Response:
+    context: AppContext = request.app[CONTEXT]
+    return web.json_response(
+        {
+            "ok": True,
+            "watchers": len(context.watchers.running),
+            "sessions": len(context.pool._entries),
+        }
+    )
 
 
 def _base(request: web.Request) -> str:
     """Префикс, под которым смонтировано приложение.
 
-    Нужен потому, что nginx отдаёт PWA не с корня домена, и все ссылки внутри
-    страницы должны учитывать этот префикс.
+    Берётся из настроек, а не из request.path: ссылки в шаблоне должны
+    указывать на префикс независимо от того, каким маршрутом пришёл запрос.
     """
     return request.app[CONTEXT].settings.web.miniapp_path.rstrip("/")
 
 
 @page_routes.get("/")
-@page_routes.get("/{tail:mini/netschool/?}")
 async def index(request: web.Request) -> web.Response:
-    """Страница приложения. Открывается по персональной ссылке с токеном."""
+    """Страница приложения.
+
+    Открывается двумя путями: кнопкой Telegram Mini App (тогда личность
+    подтверждается подписанной initData уже в браузере) и по постоянной
+    ссылке с токеном (для установленного на домашний экран приложения).
+    Здесь достаточно отдать каркас — данные страница запрашивает сама,
+    и там же происходит настоящая проверка доступа.
+    """
     context: AppContext = request.app[CONTEXT]
     token = (request.query.get("token") or request.cookies.get("netschool_token") or "").strip()
-    telegram_id = await context.miniapp.resolve_token(token)
 
-    if telegram_id is None:
-        return aiohttp_jinja2.render_template(
-            "link.html",
-            request,
-            {
-                "base": _base(request),
-                "version": STATIC_VERSION,
-                "message": "Ссылка недействительна или была отозвана.",
-            },
-            status=401,
-        )
+    user = None
+    if telegram_id := await context.miniapp.resolve_token(token):
+        user = await context.users.get(telegram_id)
 
-    user = await context.users.get(telegram_id)
     response = aiohttp_jinja2.render_template(
         "app.html",
         request,
@@ -96,14 +141,15 @@ async def index(request: web.Request) -> web.Response:
             "push_enabled": context.settings.push.configured,
         },
     )
-    response.set_cookie(
-        "netschool_token",
-        token,
-        max_age=365 * 24 * 3600,
-        httponly=True,
-        samesite="Lax",
-        secure=request.url.scheme == "https",
-    )
+    if token:
+        response.set_cookie(
+            "netschool_token",
+            token,
+            max_age=365 * 24 * 3600,
+            httponly=True,
+            samesite="Lax",
+            secure=request.url.scheme == "https",
+        )
     return response
 
 
@@ -121,7 +167,7 @@ async def manifest(request: web.Request) -> web.Response:
         "short_name": "Дневник",
         "description": "Дневник, оценки и домашние задания",
         # start_url с токеном: иначе установленное приложение открывалось бы
-        # на странице «ссылка недействительна».
+        # на странице «не удалось вас опознать».
         "start_url": f"{base}/?token={token}" if token else f"{base}/",
         "scope": f"{base}/",
         "display": "standalone",
@@ -147,29 +193,17 @@ async def service_worker(request: web.Request) -> web.FileResponse:
     # поэтому у него отдельный маршрут, а не путь внутри /static.
     return web.FileResponse(
         STATIC_DIR / "sw.js",
-        headers={"Content-Type": "application/javascript; charset=utf-8",
-                 "Service-Worker-Allowed": "/"},
-    )
-
-
-@page_routes.get("/health")
-async def health(request: web.Request) -> web.Response:
-    """Проверка живости для systemd и мониторинга."""
-    context: AppContext = request.app[CONTEXT]
-    return web.json_response(
-        {
-            "ok": True,
-            "watchers": len(context.watchers.running),
-            "sessions": len(context.pool._entries),
-        }
+        headers={
+            "Content-Type": "application/javascript; charset=utf-8",
+            "Service-Worker-Allowed": _base(request) + "/",
+        },
     )
 
 
 async def start_web(context: AppContext, bot=None) -> None:
     """Запустить сервер и держать его до отмены задачи."""
     settings = context.settings.web
-    app = create_app(context, bot)
-    runner = web.AppRunner(app, access_log=None)
+    runner = web.AppRunner(create_app(context, bot), access_log=None)
     await runner.setup()
     site = web.TCPSite(runner, settings.host, settings.port)
     await site.start()
@@ -177,14 +211,7 @@ async def start_web(context: AppContext, bot=None) -> None:
         "Мини-приложение слушает %s:%s (%s)", settings.host, settings.port, settings.miniapp_url
     )
     try:
-        # Задача живёт, пока её не отменят при остановке процесса.
         while True:
-            await _forever()
+            await asyncio.sleep(3600)
     finally:
         await runner.cleanup()
-
-
-async def _forever() -> None:
-    import asyncio
-
-    await asyncio.sleep(3600)

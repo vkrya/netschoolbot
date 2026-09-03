@@ -7,20 +7,30 @@ from aiogram.types import (
     InlineKeyboardMarkup,
     KeyboardButton,
     ReplyKeyboardMarkup,
+    WebAppInfo,
 )
 
 from ..domain.models import User
 
 
-def main_menu() -> ReplyKeyboardMarkup:
-    return ReplyKeyboardMarkup(
-        keyboard=[
-            [KeyboardButton(text="📚 Домашка"), KeyboardButton(text="🗓 Расписание")],
-            [KeyboardButton(text="📊 Оценки"), KeyboardButton(text="📈 Статистика")],
-            [KeyboardButton(text="⚙️ Настройки"), KeyboardButton(text="👤 Профиль")],
-        ],
-        resize_keyboard=True,
-    )
+def main_menu(miniapp_url: str = "") -> ReplyKeyboardMarkup:
+    """Нижнее меню бота.
+
+    Если известен адрес мини-приложения, первой кнопкой ставим его: это
+    основной способ смотреть дневник, а команды остаются для быстрых
+    ответов прямо в чате.
+    """
+    rows = [
+        [KeyboardButton(text="📚 Домашка"), KeyboardButton(text="🗓 Расписание")],
+        [KeyboardButton(text="📊 Оценки"), KeyboardButton(text="📈 Статистика")],
+        [KeyboardButton(text="⚙️ Настройки"), KeyboardButton(text="👤 Профиль")],
+    ]
+    if miniapp_url:
+        rows.insert(
+            0,
+            [KeyboardButton(text="📱 Дневник", web_app=WebAppInfo(url=miniapp_url))],
+        )
+    return ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True)
 
 
 def settings_menu(user: User) -> InlineKeyboardMarkup:
@@ -111,7 +121,26 @@ def confirm(action: str, *, yes: str = "Да", no: str = "Отмена") -> Inli
     )
 
 
-def miniapp_link(url: str) -> InlineKeyboardMarkup:
+def miniapp(url: str) -> InlineKeyboardMarkup:
+    """Кнопка открытия мини-приложения внутри Telegram.
+
+    WebAppInfo, а не обычная ссылка: приложение открывается поверх чата, а
+    не в браузере, и получает подписанную initData — по ней сервер опознаёт
+    человека без токена в адресе.
+    """
     return InlineKeyboardMarkup(
-        inline_keyboard=[[InlineKeyboardButton(text="📱 Открыть приложение", url=url)]]
+        inline_keyboard=[
+            [InlineKeyboardButton(text="📱 Открыть дневник", web_app=WebAppInfo(url=url))]
+        ]
+    )
+
+
+def miniapp_external(url: str) -> InlineKeyboardMarkup:
+    """Обычная ссылка — для установки приложения на домашний экран.
+
+    Внутри Telegram установить PWA нельзя: для этого страницу нужно открыть
+    в самом браузере.
+    """
+    return InlineKeyboardMarkup(
+        inline_keyboard=[[InlineKeyboardButton(text="🌐 Открыть в браузере", url=url)]]
     )

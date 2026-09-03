@@ -39,11 +39,28 @@ def next_school_days(start: dt.date, count: int = 3) -> list[dt.date]:
     return days
 
 
+async def miniapp_url(app: AppContext, user: User) -> str:
+    """Адрес мини-приложения для этого пользователя.
+
+    Токен в адресе нужен не для входа внутри Telegram — там личность
+    подтверждает подписанная initData, — а чтобы приложение работало и
+    после установки на домашний экран, где initData уже нет.
+    """
+    if not user.school.configured:
+        return ""
+    token = await app.miniapp.issue_token(user.telegram_id)
+    return f"{app.settings.web.miniapp_url}/?token={token}"
+
+
 @router.message(CommandStart())
 @router.message(Command("menu"))
-async def show_menu(message: Message, user: User) -> None:
+async def show_menu(message: Message, user: User, app: AppContext) -> None:
     text = GREETING if not user.school.configured else "Главное меню"
-    await message.answer(text, parse_mode="HTML", reply_markup=keyboards.main_menu())
+    await message.answer(
+        text,
+        parse_mode="HTML",
+        reply_markup=keyboards.main_menu(await miniapp_url(app, user)),
+    )
 
 
 @router.message(Command("dz"))
@@ -186,30 +203,50 @@ async def profile(message: Message, user: User) -> None:
 
 
 @router.message(Command("app"))
-async def miniapp(message: Message, user: User, app: AppContext) -> None:
-    """Постоянная ссылка на PWA."""
+async def open_miniapp(message: Message, user: User, app: AppContext) -> None:
+    """Открыть дневник мини-приложением Telegram."""
     if hint := require_school(user):
         await reply(message, hint)
         return
-    token = await app.miniapp.issue_token(user.telegram_id)
-    url = f"{app.settings.web.miniapp_url}?token={token}"
-    await reply(
-        message,
-        "📱 Ваша personal-ссылка на приложение. Не передавайте её другим — "
-        "по ней открывается ваш дневник.\n\n"
-        "Если ссылка утекла, выпустите новую: /app_reset",
-        reply_markup=keyboards.miniapp_link(url),
+    url = await miniapp_url(app, user)
+    await message.answer(
+        "📱 <b>Дневник</b>\n\n"
+        "Открывается прямо в Telegram — оценки, домашние задания и расписание "
+        "в одном месте.",
+        parse_mode="HTML",
+        reply_markup=keyboards.miniapp(url),
+    )
+
+
+@router.message(Command("app_install"))
+async def install_miniapp(message: Message, user: User, app: AppContext) -> None:
+    """Ссылка для установки на домашний экран.
+
+    Отдельной командой, потому что внутри Telegram установить приложение
+    нельзя — для этого страницу нужно открыть в самом браузере.
+    """
+    if hint := require_school(user):
+        await reply(message, hint)
+        return
+    url = await miniapp_url(app, user)
+    await message.answer(
+        "🌐 <b>Установка на телефон</b>\n\n"
+        "Откройте ссылку в браузере и выберите «Добавить на домашний экран» — "
+        "дневник появится отдельной иконкой и будет работать без Telegram.\n\n"
+        "⚠️ Ссылка персональная: по ней открывается ваш дневник. "
+        "Если она утекла — <code>/app_reset</code>.",
+        parse_mode="HTML",
+        reply_markup=keyboards.miniapp_external(url),
     )
 
 
 @router.message(Command("app_reset"))
 async def miniapp_reset(message: Message, user: User, app: AppContext) -> None:
     token = await app.miniapp.issue_token(user.telegram_id, revoke_existing=True)
-    url = f"{app.settings.web.miniapp_url}?token={token}"
-    await reply(
-        message,
-        "🔄 Старая ссылка отозвана. Новая:",
-        reply_markup=keyboards.miniapp_link(url),
+    url = f"{app.settings.web.miniapp_url}/?token={token}"
+    await message.answer(
+        "🔄 Старая ссылка отозвана, прежние перестали работать. Новая:",
+        reply_markup=keyboards.miniapp_external(url),
     )
 
 
