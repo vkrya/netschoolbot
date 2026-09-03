@@ -60,6 +60,7 @@ class AppContext:
         await db.connect()
 
         users = UserRepository(db)
+        await _import_legacy_if_empty(settings, db, users)
         sessions = SessionRepository(db)
         pool = SessionPool(settings.netschool, sessions)
         state = MarkStateRepository(db)
@@ -86,3 +87,36 @@ class AppContext:
         await self.pool.close_all()
         await self.db.close()
         logger.info("Приложение остановлено")
+
+
+async def _import_legacy_if_empty(settings: Settings, db: Database, users: UserRepository) -> None:
+    """Перенести данные старой версии, если база только что создана.
+
+    Развёртывание автоматическое, а перенос вручную требует захода на сервер.
+    Без этого после обновления бот поднялся бы с пустой базой, и все
+    пользователи разом потеряли бы школу и настройки.
+
+    Условие намеренно узкое: переносим, только если пользователей нет вообще
+    и рядом лежат файлы старой версии. Повторно ничего не произойдёт.
+    """
+    if await users.all_ids():
+        return
+
+    legacy_users_file = settings.data_dir / "netschool_users" / "netschool_users.json"
+    if not legacy_users_file.exists():
+        return
+
+    from .db.import_legacy import LegacyImporter
+    from .db.repositories import MarkStateRepository, MiniappRepository, SessionRepository
+
+    logger.info("База пуста, а данные старой версии на месте — переношу")
+    importer = LegacyImporter(
+        settings.data_dir,
+        users=users,
+        state=MarkStateRepository(db),
+        sessions=SessionRepository(db),
+        miniapp=MiniappRepository(db, login_code_ttl=settings.web.login_code_ttl),
+    )
+    report = await importer.run()
+    for line in report.as_text().splitlines():
+        logger.info("Перенос: %s", line)

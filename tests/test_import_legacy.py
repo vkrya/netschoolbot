@@ -208,3 +208,66 @@ class TestImport:
         report = await importer.run()
         text = report.as_text()
         assert "Пользователей перенесено: 1" in text
+
+
+class TestAutoImportOnFirstRun:
+    """Перенос при первом запуске.
+
+    Развёртывание автоматическое, поэтому без него после обновления бот
+    поднялся бы с пустой базой и все разом потеряли бы настройки.
+    """
+
+    async def test_runs_on_empty_database(self, db, users, legacy_dir, monkeypatch):
+        from app.context import _import_legacy_if_empty
+
+        settings = _settings_for(legacy_dir)
+        await _import_legacy_if_empty(settings, db, users)
+        assert await users.get(1) is not None
+
+    async def test_skips_when_users_exist(self, db, users, legacy_dir):
+        from app.context import _import_legacy_if_empty
+        from app.db.import_legacy import user_from_legacy
+
+        # Пользователь уже есть — значит, база не новая, переносить нечего.
+        await users.save(user_from_legacy(1, {"display_name": "уже был"}))
+        await _import_legacy_if_empty(_settings_for(legacy_dir), db, users)
+        assert (await users.get(1)).display_name == "уже был"
+
+    async def test_skips_without_legacy_files(self, db, users, tmp_path):
+        from app.context import _import_legacy_if_empty
+
+        await _import_legacy_if_empty(_settings_for(tmp_path / "пусто"), db, users)
+        assert await users.all_ids() == []
+
+    async def test_second_start_does_not_reimport(self, db, users, legacy_dir):
+        from app.context import _import_legacy_if_empty
+
+        settings = _settings_for(legacy_dir)
+        await _import_legacy_if_empty(settings, db, users)
+        await _import_legacy_if_empty(settings, db, users)
+        assert len(await users.all_ids()) == 1
+
+
+def _settings_for(data_dir):
+    from pathlib import Path
+
+    from app.settings import (
+        NetSchoolSettings, PushSettings, Settings, TelegramSettings, WebSettings,
+    )
+
+    return Settings(
+        data_dir=Path(data_dir),
+        db_path=Path(data_dir) / "db.sqlite3",
+        telegram=TelegramSettings(bot_token="t", admin_id=0),
+        web=WebSettings(
+            enabled=False, host="127.0.0.1", port=8283, public_url="https://x",
+            miniapp_path="/mini", session_secret="s", token_ttl=900,
+            login_code_ttl=600, cache_fresh_seconds=3600,
+        ),
+        push=PushSettings(public_key="", private_key="", subject=""),
+        netschool=NetSchoolSettings(
+            default_check_interval=300, session_ttl=1800, http_timeout=20,
+            blocked_host_ttl=600, qr_login_ttl=60, fallback_proxy="",
+        ),
+        debug=False,
+    )
