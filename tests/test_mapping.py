@@ -13,6 +13,7 @@ import pytest
 from app.domain.records import extract_mark, mark_to_int, parse_mark_float
 from app.netschool.mapping import (
     diary_days,
+    is_placeholder_name,
     homework_from_day,
     marks_from_day,
     students_from_diary_init,
@@ -212,6 +213,79 @@ class TestDiaryDays:
 
 
 class TestStudents:
+    """Разбор `student/diary/init`.
+
+    Формат ответа «Сетевого города» здесь неочевиден дважды: имя лежит в
+    nickName, а currentStudentId в списочной форме — это индекс, а не
+    идентификатор. Из-за второго профиль показывал «Ученик 583039».
+    """
+
+    def test_real_sgo_response(self):
+        # Форма, которую отдаёт sgo.e-mordovia.ru: список, имя в nickName,
+        # currentStudentId — индекс.
+        students, current = students_from_diary_init(
+            {
+                "students": [{"studentId": 583039, "nickName": "Иванов Иван"}],
+                "currentStudentId": 0,
+            }
+        )
+        assert students == [{"id": 583039, "name": "Иванов Иван"}]
+        assert current == 583039
+
+    def test_index_selects_right_child(self):
+        students, current = students_from_diary_init(
+            {
+                "students": [
+                    {"studentId": 100, "nickName": "Первый"},
+                    {"studentId": 200, "nickName": "Второй"},
+                ],
+                "currentStudentId": 1,
+            }
+        )
+        assert current == 200
+
+    def test_index_zero_is_not_treated_as_id(self):
+        # Ноль — валидный индекс, но не идентификатор.
+        _, current = students_from_diary_init(
+            {"students": [{"studentId": 42, "nickName": "А"}], "currentStudentId": 0}
+        )
+        assert current == 42
+
+    def test_id_form_wins_over_index_form(self):
+        # Если значение совпадает с чьим-то studentId, это идентификатор,
+        # а не индекс: иначе выбор уехал бы на другого ребёнка.
+        _, current = students_from_diary_init(
+            {
+                "students": [
+                    {"studentId": 1, "nickName": "Первый"},
+                    {"studentId": 2, "nickName": "Второй"},
+                ],
+                "currentStudentId": 1,
+            }
+        )
+        assert current == 1
+
+    def test_out_of_range_index_falls_back_to_first(self):
+        _, current = students_from_diary_init(
+            {"students": [{"studentId": 42, "nickName": "А"}], "currentStudentId": 99}
+        )
+        assert current == 42
+
+    @pytest.mark.parametrize(
+        "field", ["nickName", "fio", "fullName", "name", "shortName"]
+    )
+    def test_all_known_name_fields(self, field):
+        students, _ = students_from_diary_init(
+            {"students": [{"studentId": 7, field: "Петров Пётр"}]}
+        )
+        assert students[0]["name"] == "Петров Пётр"
+
+    def test_nickname_wins_over_others(self):
+        students, _ = students_from_diary_init(
+            {"students": [{"studentId": 7, "nickName": "Верное", "name": "Запасное"}]}
+        )
+        assert students[0]["name"] == "Верное"
+
     def test_dict_shape(self):
         students, current = students_from_diary_init(
             {"students": {"1": {"studentId": 10, "fio": "Иванов И."}}, "currentStudentId": 10}
@@ -219,15 +293,15 @@ class TestStudents:
         assert students == [{"id": 10, "name": "Иванов И."}]
         assert current == 10
 
-    def test_list_shape(self):
-        students, current = students_from_diary_init(
-            {"students": [{"studentId": 11, "fullName": "Петров П."}], "currentStudentId": 11}
+    def test_dict_shape_with_unknown_current(self):
+        _, current = students_from_diary_init(
+            {"students": {"0": {"studentId": 10, "fio": "А"}}, "currentStudentId": 999}
         )
-        assert students == [{"id": 11, "name": "Петров П."}]
+        assert current == 10
 
     def test_missing_current_defaults_to_first(self):
         students, current = students_from_diary_init(
-            {"students": [{"studentId": 12, "name": "А"}, {"studentId": 13, "name": "Б"}]}
+            {"students": [{"studentId": 12, "nickName": "А"}, {"studentId": 13, "nickName": "Б"}]}
         )
         assert current == 12
 
@@ -235,9 +309,37 @@ class TestStudents:
         students, _ = students_from_diary_init({"students": [{"studentId": 14}]})
         assert students[0]["name"] == "Ученик 14"
 
+    def test_blank_name_falls_through(self):
+        students, _ = students_from_diary_init(
+            {"students": [{"studentId": 14, "nickName": "   ", "fio": "Настоящее"}]}
+        )
+        assert students[0]["name"] == "Настоящее"
+
     def test_empty_payload(self):
         assert students_from_diary_init({}) == ([], None)
 
     def test_garbage_entries_are_skipped(self):
-        students, _ = students_from_diary_init({"students": ["мусор", {"studentId": 15, "fio": "В"}]})
+        students, _ = students_from_diary_init(
+            {"students": ["мусор", {"studentId": 15, "nickName": "В"}]}
+        )
         assert [s["id"] for s in students] == [15]
+
+    def test_student_id_zero_is_kept(self):
+        # 0 — допустимый studentId; `or` вместо явной проверки на None
+        # молча подменял бы его индексом.
+        students, _ = students_from_diary_init(
+            {"students": [{"studentId": 0, "nickName": "Нулевой"}]}
+        )
+        assert students[0]["id"] == 0
+
+
+class TestPlaceholderName:
+    @pytest.mark.parametrize("name", ["Ученик 583039", "Ученик 1", "  Ученик 42  ", "", "   "])
+    def test_detected(self, name):
+        assert is_placeholder_name(name) is True
+
+    @pytest.mark.parametrize(
+        "name", ["Иванов Иван", "Ученик Иванов", "Ученица 5", "Ученик", "Ученик 5А"]
+    )
+    def test_real_names_untouched(self, name):
+        assert is_placeholder_name(name) is False

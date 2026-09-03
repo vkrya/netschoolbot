@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import datetime as dt
 import logging
+import re
 from typing import Any
 
 from ..domain.records import Attachment, DiaryDay, HomeworkRecord, MarkRecord, clean_content, extract_mark
@@ -153,14 +154,27 @@ def diary_days(days: list[Any], *, today: dt.date | None = None) -> list[DiaryDa
     return result
 
 
+# Поля, в которых «Сетевой город» держит имя ученика, в порядке предпочтения.
+# nickName — основное: именно его отдаёт `student/diary/init`. Остальные
+# встречаются в ответах других установок и оставлены как запасные.
+STUDENT_NAME_FIELDS = ("nickName", "fio", "fullName", "name", "shortName")
+
+
 def students_from_diary_init(payload: dict[str, Any]) -> tuple[list[dict[str, Any]], int | None]:
     """Разобрать список детей из ответа `student/diary/init`.
 
-    Сервер отдаёт `students` то словарём, то списком — обе формы встречаются
-    в проде, поэтому поддерживаем обе.
+    Две тонкости, на которых легко ошибиться:
+
+    1. `students` приходит то списком, то словарём — обе формы встречаются.
+
+    2. `currentStudentId`, вопреки названию, в списочной форме содержит
+       **индекс** в этом списке, а не идентификатор ученика. Так его читает
+       и сама netschoolpy: ``info["students"][info["currentStudentId"]]``.
+       Если принять его за идентификатор, текущий ученик не найдётся и
+       выбор молча уедет не туда.
     """
     raw = payload.get("students") or {}
-    current_id = _safe_int(payload.get("currentStudentId"))
+    current_raw = _safe_int(payload.get("currentStudentId"))
 
     if isinstance(raw, dict):
         items: list[tuple[Any, Any]] = list(raw.items())
@@ -173,22 +187,57 @@ def students_from_diary_init(payload: dict[str, Any]) -> tuple[list[dict[str, An
     for key, student in items:
         if not isinstance(student, dict):
             continue
-        student_id = _safe_int(student.get("studentId")) or _safe_int(key)
+        student_id = _safe_int(student.get("studentId"))
+        if student_id is None:
+            student_id = _safe_int(key)
         if student_id is None:
             continue
-        name = next(
-            (
-                str(student[field]).strip()
-                for field in ("fio", "fullName", "name")
-                if str(student.get(field) or "").strip()
-            ),
-            f"Ученик {student_id}",
-        )
-        students.append({"id": student_id, "name": name})
+        students.append({"id": student_id, "name": _student_name(student, student_id)})
 
-    if current_id is None and students:
-        current_id = students[0]["id"]
-    return students, current_id
+    return students, _resolve_current(students, current_raw, is_list=isinstance(raw, list))
+
+
+def is_placeholder_name(name: str) -> bool:
+    """Похоже ли имя на заглушку `Ученик <id>`.
+
+    Нужно, чтобы починить уже сохранённые записи: пользователи, вошедшие
+    до исправления разбора, держат в базе заглушку, и сама она не
+    обновится — вход-то они больше не проходят.
+    """
+    return not name.strip() or bool(re.fullmatch(r"Ученик \d+", name.strip()))
+
+
+def _student_name(student: dict[str, Any], student_id: int) -> str:
+    for field in STUDENT_NAME_FIELDS:
+        value = str(student.get(field) or "").strip()
+        if value:
+            return value
+    # Имени в ответе нет — показываем хотя бы идентификатор, чтобы список
+    # детей оставался различимым.
+    return f"Ученик {student_id}"
+
+
+def _resolve_current(
+    students: list[dict[str, Any]], current: int | None, *, is_list: bool
+) -> int | None:
+    """Определить идентификатор текущего ученика.
+
+    Порядок проверок важен: сначала пробуем трактовать значение как
+    идентификатор (словарная форма ответа), и только потом как индекс
+    (списочная). Наоборот было бы опаснее: у первого ребёнка индекс 0,
+    и любой ноль уводил бы выбор на него.
+    """
+    if not students:
+        return None
+    if current is None:
+        return students[0]["id"]
+
+    known_ids = {item["id"] for item in students}
+    if current in known_ids:
+        return current
+    if is_list and 0 <= current < len(students):
+        return students[current]["id"]
+    return students[0]["id"]
 
 
 def _safe_int(value: Any) -> int | None:

@@ -20,6 +20,7 @@ from ..domain.models import User, normalize
 from ..domain.records import DiaryDay
 from ..netschool.errors import NetSchoolError, Reason
 from ..netschool.service import msk_today
+from .telegram_auth import InitDataError, verify_init_data
 
 logger = logging.getLogger("netschoolbot.web")
 
@@ -30,7 +31,6 @@ routes = web.RouteTableDef()
 CONTEXT = web.AppKey("context", AppContext)
 BOT = web.AppKey("bot", object)
 USER = web.RequestKey("netschool_user", User)
-TOKEN = web.RequestKey("netschool_token", str)
 
 
 def context(request: web.Request) -> AppContext:
@@ -67,15 +67,31 @@ async def error_middleware(request: web.Request, handler):
         return json_error("Внутренняя ошибка. Она записана, я разберусь.", status=500)
 
 
-@web.middleware
-async def auth_middleware(request: web.Request, handler):
-    """Проверка токена доступа.
+async def resolve_identity(request: web.Request) -> tuple[int | None, str]:
+    """Кто делает запрос. Возвращает (telegram_id, способ).
 
-    Токен приходит либо в заголовке, либо в query — второе нужно, потому что
-    PWA открывается по ссылке из Telegram, где заголовок задать негде.
+    Два пути входа, и порядок между ними важен:
+
+    1. `initData` от Telegram — подписана токеном бота, подделать её нельзя.
+       Проверяется первой: если приложение открыто внутри Telegram, это
+       самое надёжное удостоверение, и никакой токен из ссылки его не
+       перебивает.
+    2. Постоянный токен из ссылки `/app` — для установленного на домашний
+       экран приложения, которое открывается вне Telegram и initData не
+       получает.
     """
-    if not request.path.startswith("/api/"):
-        return await handler(request)
+    app = context(request)
+
+    init_data = (
+        request.headers.get("X-Telegram-Init-Data") or request.query.get("tgWebAppData") or ""
+    ).strip()
+    if init_data:
+        try:
+            tg_user = verify_init_data(init_data, app.settings.telegram.bot_token)
+        except InitDataError as exc:
+            logger.info("initData отклонена: %s", exc)
+        else:
+            return tg_user.id, "telegram"
 
     token = (
         request.headers.get("X-Netschool-Token")
@@ -83,29 +99,49 @@ async def auth_middleware(request: web.Request, handler):
         or request.cookies.get("netschool_token")
         or ""
     ).strip()
+    if token:
+        return await app.miniapp.resolve_token(token), "token"
 
-    telegram_id = await context(request).miniapp.resolve_token(token)
+    return None, "none"
+
+
+@web.middleware
+async def auth_middleware(request: web.Request, handler):
+    """Опознание пользователя для запросов к API."""
+    if "/api/" not in request.path:
+        return await handler(request)
+
+    telegram_id, method = await resolve_identity(request)
     if telegram_id is None:
-        return json_error("Ссылка недействительна. Запросите новую: /app", status=401,
-                          reason="token")
+        return json_error(
+            "Не удалось вас опознать. Откройте приложение кнопкой в боте "
+            "или запросите новую ссылку: /app",
+            status=401,
+            reason="auth",
+        )
 
     user = await context(request).users.get(telegram_id)
     if user is None:
-        return json_error("Пользователь не найден", status=401, reason="token")
+        return json_error(
+            "Вы ещё не входили в «Сетевой город». Откройте бота и выполните /login",
+            status=401,
+            reason="login",
+        )
 
     request[USER] = user
-    request[TOKEN] = token
     response = await handler(request)
-    # Токен кладётся в cookie, чтобы дальнейшие запросы шли без него в URL
-    # и ссылка не утекала в историю браузера и в Referer.
-    response.set_cookie(
-        "netschool_token",
-        token,
-        max_age=365 * 24 * 3600,
-        httponly=True,
-        samesite="Lax",
-        secure=request.url.scheme == "https",
-    )
+
+    # Токен из ссылки переносим в cookie, чтобы он не тянулся в каждом URL
+    # и не утекал в историю браузера и в заголовок Referer.
+    if method == "token" and request.query.get("token"):
+        response.set_cookie(
+            "netschool_token",
+            request.query["token"],
+            max_age=365 * 24 * 3600,
+            httponly=True,
+            samesite="Lax",
+            secure=request.url.scheme == "https",
+        )
     return response
 
 

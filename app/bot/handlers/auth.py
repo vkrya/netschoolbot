@@ -537,6 +537,10 @@ async def _finish_login(user: User, app: AppContext, message: Message) -> None:
             "чтобы не прислать вам весь журнал разом.",
         ]
     )
+    from .menu import miniapp_url
+
     await message.answer(
-        "\n".join(lines), parse_mode="HTML", reply_markup=keyboards.main_menu()
+        "\n".join(lines),
+        parse_mode="HTML",
+        reply_markup=keyboards.main_menu(await miniapp_url(app, saved)),
     )

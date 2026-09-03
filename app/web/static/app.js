@@ -6,6 +6,27 @@
 
 const { base, token, pushEnabled } = window.NETSCHOOL;
 
+// Telegram отдаёт объект только когда страница открыта мини-приложением.
+// Вне Telegram (установленное на домашний экран приложение) его нет, и
+// работаем по постоянному токену из ссылки.
+const tg = window.Telegram && window.Telegram.WebApp;
+const initData = (tg && tg.initData) || '';
+
+if (tg) {
+  tg.ready();
+  tg.expand();
+  // Цвета берём из темы Telegram, чтобы приложение не выбивалось из чата.
+  const theme = tg.themeParams || {};
+  const root = document.documentElement.style;
+  if (theme.bg_color) root.setProperty('--bg', theme.bg_color);
+  if (theme.secondary_bg_color) root.setProperty('--surface', theme.secondary_bg_color);
+  if (theme.text_color) root.setProperty('--text', theme.text_color);
+  if (theme.hint_color) root.setProperty('--muted', theme.hint_color);
+  if (theme.link_color) root.setProperty('--accent', theme.link_color);
+  // Внутри Telegram у окна свои отступы, системные уже учтены оболочкой.
+  document.body.style.paddingBottom = '64px';
+}
+
 const banner = document.getElementById('banner');
 const refreshButton = document.getElementById('refresh');
 
@@ -32,10 +53,13 @@ function markClass(mark) {
 
 async function api(path, options = {}) {
   const url = new URL(base + path, location.origin);
-  const response = await fetch(url, {
-    ...options,
-    headers: { 'X-Netschool-Token': token, 'Content-Type': 'application/json', ...(options.headers || {}) },
-  });
+  const headers = { 'Content-Type': 'application/json', ...(options.headers || {}) };
+  // initData подписана токеном бота — сервер доверяет ей больше, чем
+  // токену из ссылки, поэтому шлём оба и приоритет отдаёт он.
+  if (initData) headers['X-Telegram-Init-Data'] = initData;
+  if (token) headers['X-Netschool-Token'] = token;
+
+  const response = await fetch(url, { ...options, headers });
 
   let payload;
   try {
@@ -49,6 +73,15 @@ async function api(path, options = {}) {
     throw error;
   }
   return payload;
+}
+
+function attachmentUrl(id) {
+  // Файл скачивает браузер обычной ссылкой, заголовок к ней не приложить —
+  // поэтому удостоверение уходит параметром запроса.
+  const credential = initData
+    ? `tgWebAppData=${encodeURIComponent(initData)}`
+    : `token=${encodeURIComponent(token)}`;
+  return `${base}/api/attachment/${id}?${credential}`;
 }
 
 function skeleton(container, rows = 4) {
@@ -153,7 +186,7 @@ const views = {
                   ? `<div class="chips">${item.attachments
                       .map(
                         (a) =>
-                          `<a class="chip" href="${base}/api/attachment/${a.id}?token=${encodeURIComponent(token)}">📎 ${escapeHtml(a.name)}</a>`
+                          `<a class="chip" href="${attachmentUrl(a.id)}" target="_blank" rel="noopener">📎 ${escapeHtml(a.name)}</a>`
                       )
                       .join('')}</div>`
                   : ''
@@ -226,7 +259,7 @@ async function render(name, { force = false } = {}) {
     loaded.add(name);
   } catch (error) {
     loaded.delete(name);
-    const needsLogin = error.reason === 'auth' || error.reason === 'token';
+    const needsLogin = error.reason === 'login' || error.reason === 'auth';
     container.innerHTML = `<div class="card">
         <p>${escapeHtml(error.message)}</p>
         ${needsLogin ? '<p class="muted small">Откройте бота в Telegram и выполните /login.</p>' : ''}
@@ -243,6 +276,7 @@ function switchTo(name) {
     button.classList.toggle('active', button.dataset.view === name);
   });
   render(name);
+  updateBackButton();
 }
 
 document.querySelectorAll('.tabs button').forEach((button) => {
@@ -288,6 +322,18 @@ function urlBase64ToUint8Array(value) {
   const base64 = (value + padding).replace(/-/g, '+').replace(/_/g, '/');
   const raw = atob(base64);
   return Uint8Array.from([...raw].map((char) => char.charCodeAt(0)));
+}
+
+// Внутри Telegram аппаратная кнопка «назад» закрывает приложение целиком,
+// поэтому свою навигацию по вкладкам показываем его кнопкой.
+if (tg && tg.BackButton) {
+  tg.BackButton.onClick(() => switchTo('diary'));
+}
+
+function updateBackButton() {
+  if (!tg || !tg.BackButton) return;
+  if (activeView === 'diary') tg.BackButton.hide();
+  else tg.BackButton.show();
 }
 
 switchTo('diary');
