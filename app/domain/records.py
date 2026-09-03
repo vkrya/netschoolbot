@@ -21,6 +21,9 @@ from .models import MarkKind, normalize
 
 _SEP = "\x1f"  # ASCII unit separator: в данных «Сетевого города» не встречается
 
+# Защита от циклических ссылок в объектах netschoolpy.
+_MAX_MARK_DEPTH = 5
+
 
 def _part(value: Any) -> str:
     """Одно поле составного ключа с экранированием разделителя."""
@@ -170,30 +173,14 @@ def clean_content(content: Any) -> str:
     return text.replace("---Не указана---", "").strip()
 
 
-def extract_mark(source: Any) -> str:
+def extract_mark(source: Any, _depth: int = 0) -> str:
     """Достать значение оценки из чего угодно, что отдаёт netschoolpy.
 
     Оценка приезжает то объектом с `textMark`, то словарём, то числом.
     Возвращается строка (`""` — оценки нет), чтобы дальше по коду не было
     трёх разных «пустых» значений: None, "" и 0.
     """
-    if source is None:
-        return ""
-
-    text_mark = getattr(source, "textMark", None)
-    if text_mark:
-        return str(text_mark).strip()
-
-    if hasattr(source, "mark"):
-        inner = getattr(source, "mark", None)
-        if inner is not None and inner is not source:
-            return extract_mark(inner)
-
-    if isinstance(source, dict):
-        for key in ("textMark", "mark", "value", "name"):
-            value = source.get(key)
-            if value not in (None, "", {}):
-                return extract_mark(value) if isinstance(value, dict) else str(value).strip()
+    if source is None or _depth > _MAX_MARK_DEPTH:
         return ""
 
     if isinstance(source, bool):
@@ -201,6 +188,26 @@ def extract_mark(source: Any) -> str:
         return ""
     if isinstance(source, (int, float)):
         return str(source)
+    if isinstance(source, str):
+        return source.strip()
+
+    if isinstance(source, dict):
+        for key in ("textMark", "mark", "value", "name"):
+            value = source.get(key)
+            if value not in (None, "", {}):
+                return extract_mark(value, _depth + 1)
+        return ""
+
+    text_mark = getattr(source, "textMark", None)
+    if text_mark:
+        return extract_mark(text_mark, _depth + 1)
+
+    # Объект-задание: оценка лежит в поле `mark`. Пустое поле означает, что
+    # оценки нет — возвращаем "", а не строковое представление объекта.
+    if hasattr(source, "mark"):
+        inner = getattr(source, "mark")
+        return "" if inner is source else extract_mark(inner, _depth + 1)
+
     return str(source).strip()
 
 
