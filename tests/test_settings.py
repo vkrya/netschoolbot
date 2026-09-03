@@ -35,29 +35,55 @@ class TestMinimalConfig:
         assert load_settings(require_bot_token=False).telegram.bot_token == ""
 
 
-class TestValidation:
-    def test_interval_out_of_range(self, monkeypatch):
-        monkeypatch.setenv("NETSCHOOL_BOT_TOKEN", "123:abc")
-        monkeypatch.setenv("CHECK_INTERVAL", "5")
-        with pytest.raises(SettingsError, match="CHECK_INTERVAL"):
-            load_settings()
+class TestToleranceToExistingEnv:
+    """Служба живёт с рукописным .env, который переживает обновления.
 
-    def test_non_numeric_interval(self, monkeypatch):
+    Странное значение должно подставлять значение по умолчанию и писать в
+    лог, а не мешать боту запуститься: отказ стартовать означает не
+    «безопасно», а «бот лежит, пока кто-нибудь не зайдёт по SSH».
+    """
+
+    @pytest.fixture(autouse=True)
+    def token(self, monkeypatch):
         monkeypatch.setenv("NETSCHOOL_BOT_TOKEN", "123:abc")
+
+    def test_too_small_interval_is_clamped(self, monkeypatch, caplog):
+        monkeypatch.setenv("CHECK_INTERVAL", "5")
+        settings = load_settings()
+        assert settings.netschool.default_check_interval == 180
+        assert "CHECK_INTERVAL" in caplog.text
+
+    def test_too_large_interval_is_clamped(self, monkeypatch):
+        monkeypatch.setenv("CHECK_INTERVAL", "99999")
+        assert load_settings().netschool.default_check_interval == 10800
+
+    def test_non_numeric_interval_falls_back(self, monkeypatch, caplog):
         monkeypatch.setenv("CHECK_INTERVAL", "быстро")
-        with pytest.raises(SettingsError, match="целое число"):
-            load_settings()
+        assert load_settings().netschool.default_check_interval == 300
+        assert "не число" in caplog.text
+
+    def test_bad_boolean_falls_back_to_default(self, monkeypatch, caplog):
+        monkeypatch.setenv("NETSCHOOL_WEB_ENABLED", "может быть")
+        assert load_settings().web.enabled is True
+        assert "не да/нет" in caplog.text
+
+    def test_malformed_proxy_entry_is_skipped(self, monkeypatch, caplog):
+        monkeypatch.setenv("NETSCHOOL_PROXY_HOSTS", "=socks5://1:1080,b.ru=socks5://2:1080")
+        settings = load_settings()
+        assert settings.netschool.proxy_for("https://b.ru") == "socks5://2:1080"
+        assert "без имени хоста" in caplog.text
 
     def test_inline_comment_in_value(self, monkeypatch):
         # Рукописные .env часто содержат "300  # комментарий".
-        monkeypatch.setenv("NETSCHOOL_BOT_TOKEN", "123:abc")
         monkeypatch.setenv("CHECK_INTERVAL", "600  # каждые 10 минут")
         assert load_settings().netschool.default_check_interval == 600
 
-    def test_bad_boolean(self, monkeypatch):
-        monkeypatch.setenv("NETSCHOOL_BOT_TOKEN", "123:abc")
-        monkeypatch.setenv("NETSCHOOL_WEB_ENABLED", "может быть")
-        with pytest.raises(SettingsError, match="да/нет"):
+    def test_only_missing_token_is_fatal(self, monkeypatch):
+        # Единственное, без чего работать действительно нечем.
+        monkeypatch.delenv("NETSCHOOL_BOT_TOKEN")
+        monkeypatch.setenv("CHECK_INTERVAL", "чушь")
+        monkeypatch.setenv("NETSCHOOL_WEB_ENABLED", "чушь")
+        with pytest.raises(SettingsError, match="NETSCHOOL_BOT_TOKEN"):
             load_settings()
 
 
@@ -74,11 +100,10 @@ class TestProxyHosts:
         settings = load_settings()
         assert settings.netschool.proxy_for("https://a.ru/x") == "socks5://1:1080"
 
-    def test_empty_host_is_rejected(self, monkeypatch):
+    def test_empty_host_is_skipped(self, monkeypatch):
         monkeypatch.setenv("NETSCHOOL_BOT_TOKEN", "123:abc")
         monkeypatch.setenv("NETSCHOOL_PROXY_HOSTS", "=socks5://1:1080")
-        with pytest.raises(SettingsError, match="пустое имя хоста"):
-            load_settings()
+        assert load_settings().netschool.proxy_hosts == {}
 
 
 class TestUrls:

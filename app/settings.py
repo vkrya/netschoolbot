@@ -2,28 +2,47 @@
 
 Один источник правды: dataclass, собираемый из окружения ровно один раз при
 старте. В отличие от старого `config.py`, здесь нет модуля-с-константами,
-который каждый импортёр переименовывает под себя, и есть валидация: если
-обязательного значения нет или оно бессмысленное — процесс не стартует
-с невнятной ошибкой на первом запросе, а падает сразу и по делу.
+который каждый импортёр переименовывает под себя.
+
+Отношение к некорректным значениям намеренно снисходительное: странное
+значение подменяется значением по умолчанию с записью в лог, и только
+отсутствие токена бота останавливает запуск. Причина в том, что служба
+живёт на сервере с рукописным .env, который переживает обновления
+приложения: отказ стартовать означает не «безопасно», а «бот лежит, пока
+кто-нибудь не зайдёт по SSH».
 """
 
 from __future__ import annotations
 
+import logging
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
 
 from dotenv import load_dotenv
 
-BASE_DIR = Path(__file__).resolve().parent.parent
+logger = logging.getLogger("netschoolbot.settings")
 
 from .domain.models import MAX_CHECK_INTERVAL, MIN_CHECK_INTERVAL
+
+BASE_DIR = Path(__file__).resolve().parent.parent
 
 MSK_UTC_OFFSET_HOURS = 3
 
 
 class SettingsError(RuntimeError):
-    """Конфигурация непригодна для запуска."""
+    """Конфигурация непригодна для запуска.
+
+    Поднимается только тогда, когда работать действительно нечем — по сути,
+    при отсутствии токена бота. Всё остальное чинится подстановкой значения
+    по умолчанию с записью в лог.
+
+    Так сделано не из вкуса к снисходительности. Служба живёт на сервере с
+    рукописным .env, который переживает обновления приложения. Отказ
+    стартовать из-за подозрительного значения означает не «безопасно», а
+    «бот молча лежит, пока кто-нибудь не зайдёт по SSH» — что уже
+    случилось из-за настройки, которая ни на что не влияла.
+    """
 
 
 def _env(key: str, default: str = "") -> str:
@@ -40,8 +59,9 @@ def _env_int(key: str, default: int) -> int:
         return default
     try:
         return int(raw)
-    except ValueError as exc:
-        raise SettingsError(f"{key}={raw!r} — ожидалось целое число") from exc
+    except ValueError:
+        logger.warning("%s=%r — не число, беру значение по умолчанию %s", key, raw, default)
+        return default
 
 
 def _env_bool(key: str, default: bool) -> bool:
@@ -52,7 +72,8 @@ def _env_bool(key: str, default: bool) -> bool:
         return True
     if raw in {"0", "false", "no", "off"}:
         return False
-    raise SettingsError(f"{key}={raw!r} — ожидалось да/нет (1/0, true/false)")
+    logger.warning("%s=%r — не да/нет, беру значение по умолчанию %s", key, raw, default)
+    return default
 
 
 @dataclass(frozen=True, slots=True)
@@ -149,7 +170,8 @@ def _parse_proxy_hosts(raw: str, volgograd_proxy: str) -> dict[str, str]:
         host, _, proxy = chunk.partition("=")
         host = host.strip()
         if not host:
-            raise SettingsError(f"NETSCHOOL_PROXY_HOSTS: пустое имя хоста в {chunk!r}")
+            logger.warning("NETSCHOOL_PROXY_HOSTS: пропускаю запись без имени хоста: %r", chunk)
+            continue
         hosts[host] = proxy.strip()
     return hosts
 
@@ -178,11 +200,15 @@ def load_settings(*, require_bot_token: bool = True) -> Settings:
     web_enabled = _env_bool("NETSCHOOL_WEB_ENABLED", True)
 
     check_interval = _env_int("CHECK_INTERVAL", 300)
-    if not MIN_CHECK_INTERVAL <= check_interval <= MAX_CHECK_INTERVAL:
-        raise SettingsError(
-            f"CHECK_INTERVAL={check_interval} вне допустимых "
-            f"{MIN_CHECK_INTERVAL}..{MAX_CHECK_INTERVAL} секунд"
+    clamped = max(MIN_CHECK_INTERVAL, min(MAX_CHECK_INTERVAL, check_interval))
+    if clamped != check_interval:
+        # Слишком частые проверки банит уже школьный сервер, но это не повод
+        # не запускать бота: подрезаем до допустимого и говорим об этом.
+        logger.warning(
+            "CHECK_INTERVAL=%s вне допустимых %s..%s — использую %s",
+            check_interval, MIN_CHECK_INTERVAL, MAX_CHECK_INTERVAL, clamped,
         )
+        check_interval = clamped
 
     return Settings(
         data_dir=data_dir,
