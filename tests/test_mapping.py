@@ -12,6 +12,7 @@ import pytest
 
 from app.domain.records import extract_mark, mark_to_int, parse_mark_float
 from app.netschool.mapping import (
+    lessons_from_day,
     diary_days,
     is_placeholder_name,
     homework_from_day,
@@ -343,3 +344,61 @@ class TestPlaceholderName:
     )
     def test_real_names_untouched(self, name):
         assert is_placeholder_name(name) is False
+
+
+class TestLessons:
+    """Расписание дня.
+
+    Оценки и задания привязываются к уроку сразу при разборе: один предмет
+    может стоять в дне дважды, и связать их обратно по названию уже нельзя.
+    """
+
+    def test_lesson_fields(self):
+        raw = lesson([assignment(mark=None, content="Упр. 5")], subject="Алгебра", number=2)
+        raw.room = "301"
+        raw.teacher = "Иванова М. П."
+        lessons = lessons_from_day(day([raw]), today=dt.date(2026, 3, 2))
+        assert len(lessons) == 1
+        item = lessons[0]
+        assert item.subject == "Алгебра"
+        assert item.number == 2
+        assert item.time_range == "09:00–09:45"
+        assert item.room == "301"
+        assert item.teacher == "Иванова М. П."
+
+    def test_marks_attach_to_their_lesson(self):
+        first = lesson([assignment(mark=5)], subject="Алгебра", number=1)
+        second = lesson([assignment(mark=3)], subject="Химия", number=2)
+        lessons = lessons_from_day(day([first, second]), today=dt.date(2026, 3, 2))
+        assert [m.mark for m in lessons[0].marks] == ["5"]
+        assert [m.mark for m in lessons[1].marks] == ["3"]
+
+    def test_same_subject_twice_keeps_marks_apart(self):
+        # Ровно та причина, по которой связывать по названию нельзя.
+        first = lesson([assignment(mark=5)], subject="Физкультура", number=1)
+        second = lesson([assignment(mark=2)], subject="Физкультура", number=6)
+        lessons = lessons_from_day(day([first, second]), today=dt.date(2026, 3, 2))
+        assert [m.mark for m in lessons[0].marks] == ["5"]
+        assert [m.mark for m in lessons[1].marks] == ["2"]
+
+    def test_homework_attaches_to_lesson(self):
+        raw = lesson([assignment(mark=None, content="Упр. 7")], number=3)
+        lessons = lessons_from_day(day([raw]), today=dt.date(2026, 3, 2))
+        assert [h.text for h in lessons[0].homework] == ["Упр. 7"]
+
+    def test_lessons_sorted_by_number(self):
+        raw = [
+            lesson([assignment(mark=None, content="")], subject="Химия", number=3),
+            lesson([assignment(mark=None, content="")], subject="Алгебра", number=1),
+        ]
+        lessons = lessons_from_day(day(raw), today=dt.date(2026, 3, 2))
+        assert [item.number for item in lessons] == [1, 3]
+
+    def test_missing_number_falls_back_to_position(self):
+        raw = lesson([assignment(mark=None, content="")], number=None)
+        lessons = lessons_from_day(day([raw]), today=dt.date(2026, 3, 2))
+        assert lessons[0].number == 1
+
+    def test_diary_days_include_lessons(self):
+        days = diary_days([day([lesson([assignment()])])], today=dt.date(2026, 3, 2))
+        assert len(days[0].lessons) == 1

@@ -158,9 +158,36 @@ class TrackedMark:
     missing_streak: int = 0
 
 
+@dataclass(frozen=True, slots=True)
+class Lesson:
+    """Урок в расписании дня.
+
+    Раньше день нёс только оценки и задания вперемешку, без привязки к
+    уроку. Экран дневника показывает именно расписание — с номером,
+    временем, кабинетом и тем, что на этом уроке получили и задали, —
+    поэтому урок стал отдельной записью.
+    """
+
+    number: int | None
+    subject: str
+    start: str = ""
+    end: str = ""
+    room: str = ""
+    teacher: str = ""
+    marks: tuple[MarkRecord, ...] = ()
+    homework: tuple[HomeworkRecord, ...] = ()
+
+    @property
+    def time_range(self) -> str:
+        if self.start and self.end:
+            return f"{self.start}–{self.end}"
+        return self.start or ""
+
+
 @dataclass(slots=True)
 class DiaryDay:
     day: dt.date
+    lessons: list[Lesson] = field(default_factory=list)
     marks: list[MarkRecord] = field(default_factory=list)
     homework: list[HomeworkRecord] = field(default_factory=list)
 

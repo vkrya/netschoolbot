@@ -90,8 +90,10 @@ class TestPages:
         response = await client.get(f"{BASE}/", params={"token": token})
         assert response.status == 200
         text = await response.text()
-        assert "Иванов И." in text
-        assert "app.js" in text
+        assert "js/app.js" in text
+        # Имя приезжает в скрипт-блоке, а не в разметке, и Jinja экранирует
+        # кириллицу в \uXXXX — сравниваем в том же виде.
+        assert json.dumps("Иванов И.") in text
 
     async def test_root_redirects_into_app_keeping_query(self, client, token):
         # Ссылку открывают без завершающего слэша; потерять при переадресации
@@ -153,10 +155,36 @@ class TestPageLinksResolve:
             assert response.status == 200, f"{link} отдал {response.status}"
 
     async def test_stylesheet_and_script_have_content(self, client, token):
-        for asset in ("app.css", "app.js"):
+        for asset in ("app.css", "js/app.js"):
             response = await client.get(f"{BASE}/static/{asset}")
             assert response.status == 200
             assert len(await response.text()) > 500, f"{asset} подозрительно пуст"
+
+    async def test_every_module_import_resolves(self, client, token):
+        """Модули импортируют друг друга, и этих ссылок в разметке нет.
+
+        Обход только по разметке пропустил бы 404 на core.js — а без него
+        не работает ничего. Поэтому идём по графу импортов от точки входа.
+        """
+        seen: set[str] = set()
+        queue = ["js/app.js"]
+
+        while queue:
+            path = queue.pop()
+            if path in seen:
+                continue
+            seen.add(path)
+
+            response = await client.get(f"{BASE}/static/{path}")
+            assert response.status == 200, f"{path} отдал {response.status}"
+            source = await response.text()
+
+            directory = path.rsplit("/", 1)[0] if "/" in path else ""
+            for target in re.findall(r"""from\s+['"]\./([^'"]+)['"]""", source):
+                queue.append(f"{directory}/{target}" if directory else target)
+
+        # Защита от самообмана: если граф не обошёлся, проверять нечего.
+        assert len(seen) >= 5, f"обойдено модулей: {len(seen)}"
 
     async def test_api_base_matches_mount_point(self, client, token):
         page = await client.get(f"{BASE}/", params={"token": token})
@@ -372,3 +400,63 @@ class TestTelegramMiniApp:
             f"{BASE}/api/attachment/1", params={"tgWebAppData": self.init_data(1)}
         )
         assert response.status == 200
+
+
+class TestDiaryScreen:
+    """Экран дневника: неделя целиком с расписанием."""
+
+    async def test_diary_returns_lessons(self, client, app_context, token):
+        app_context.diary.marks = [record(0)]
+        response = await client.get(f"{BASE}/api/diary", params={"token": token})
+        data = (await response.json())["data"]
+        assert "days" in data
+        assert data["week"] == 0
+
+    async def test_week_offset_is_accepted(self, client, app_context, token):
+        response = await client.get(f"{BASE}/api/diary", params={"token": token, "week": "-2"})
+        assert (await response.json())["data"]["week"] == -2
+
+    async def test_absurd_offset_is_clamped(self, client, token):
+        # Иначе случайный параметр заставил бы перебирать сотни недель.
+        response = await client.get(f"{BASE}/api/diary", params={"token": token, "week": "9999"})
+        assert (await response.json())["data"]["week"] == 30
+
+    async def test_broken_offset_falls_back_to_current(self, client, token):
+        response = await client.get(f"{BASE}/api/diary", params={"token": token, "week": "позавчера"})
+        assert (await response.json())["data"]["week"] == 0
+
+    async def test_weeks_are_cached_separately(self, client, app_context, token):
+        """Соседние недели не должны вытеснять друг друга из кэша."""
+        await client.get(f"{BASE}/api/diary", params={"token": token, "week": "0"})
+        await client.get(f"{BASE}/api/diary", params={"token": token, "week": "-1"})
+        app_context.diary.error = NetSchoolError(Reason.SERVER_UNAVAILABLE, "лежит")
+
+        for week in ("0", "-1"):
+            response = await client.get(f"{BASE}/api/diary", params={"token": token, "week": week})
+            body = await response.json()
+            assert response.status == 200
+            assert body["stale"] is False, f"неделя {week} потеряла кэш"
+
+
+class TestMarksQuarters:
+    async def test_marks_carry_quarter(self, client, app_context, token):
+        app_context.diary.marks = [record(0, date=dt.date(2026, 11, 20))]
+        response = await client.get(f"{BASE}/api/marks", params={"token": token})
+        data = (await response.json())["data"]
+        assert data["subjects"][0]["marks"][0]["quarter"] == "q2"
+        assert data["current_quarter"] in {"q1", "q2", "q3", "q4"}
+
+
+class TestMailMessage:
+    async def test_message_is_returned(self, client, app_context, users, token):
+        app_context.diary.message = {
+            "id": 7, "subject": "Тема", "author": "Учитель",
+            "text": "Текст письма", "sent": "2026-03-02", "read": False, "attachments": [],
+        }
+        response = await client.get(f"{BASE}/api/mail/7", params={"token": token})
+        assert response.status == 200
+        assert (await response.json())["data"]["text"] == "Текст письма"
+
+    async def test_bad_id_is_rejected(self, client, token):
+        response = await client.get(f"{BASE}/api/mail/не-число", params={"token": token})
+        assert response.status in (400, 404)

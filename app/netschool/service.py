@@ -127,8 +127,20 @@ class DiaryService:
         """Письма школьной почты."""
 
         async def call(client: Any) -> list[dict[str, Any]]:
-            messages = await client.mail(limit=limit)
-            return [_mail_to_dict(m) for m in (messages or [])]
+            page = await client.mail_list(page=1, page_size=limit)
+            entries = getattr(page, "entries", None)
+            if entries is None:
+                entries = page if isinstance(page, list) else []
+            return [_mail_to_dict(item) for item in entries]
+
+        return await self._with_session(user, call)
+
+    async def fetch_mail_message(self, user: User, message_id: int) -> dict[str, Any]:
+        """Одно письмо с текстом и вложениями."""
+
+        async def call(client: Any) -> dict[str, Any]:
+            message = await client.mail_read(message_id)
+            return _message_to_dict(message)
 
         return await self._with_session(user, call)
 
@@ -214,6 +226,32 @@ async def _collect_weeks(
 async def _fetch_diary_init(client: Any) -> dict[str, Any]:
     response = await client._authed_get("student/diary/init")
     return response.json()
+
+
+def _message_to_dict(message: Any) -> dict[str, Any]:
+    """Письмо целиком. Форма ответа та же, что у списка, плюс текст."""
+
+    def field(name: str, default: Any = "") -> Any:
+        if isinstance(message, dict):
+            return message.get(name, default)
+        return getattr(message, name, default)
+
+    sent = field("sent")
+    attachments = []
+    for item in field("file_attachments", []) or []:
+        att_id = item.get("id") if isinstance(item, dict) else getattr(item, "id", None)
+        name = item.get("name") if isinstance(item, dict) else getattr(item, "name", None)
+        attachments.append({"id": att_id, "name": str(name or f"file_{att_id}")})
+
+    return {
+        "id": field("id"),
+        "subject": str(field("subject") or "Без темы"),
+        "author": str(field("author_name") or ""),
+        "text": str(field("text") or ""),
+        "sent": sent.isoformat() if hasattr(sent, "isoformat") else str(sent or ""),
+        "read": bool(field("is_read", False)),
+        "attachments": attachments,
+    }
 
 
 def _mail_to_dict(message: Any) -> dict[str, Any]:
