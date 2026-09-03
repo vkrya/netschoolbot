@@ -254,12 +254,32 @@ class MarkStateRepository:
         """Есть ли у пользователя история слежения.
 
         Отличать «первый запуск» от «журнал пуст» обязательно: на первом
-        запуске уведомления не отправляются вовсе.
+        запуске уведомления не отправляются вовсе. Пользователь, помеченный
+        как перенесённый из старого проекта, тоже считается без истории:
+        его ключи оценок посчитаны по другим правилам и не совпадут.
         """
         row = await self._db.fetch_one(
-            "SELECT 1 FROM tracked_marks WHERE telegram_id = ? LIMIT 1", (telegram_id,)
+            """SELECT
+                   (SELECT 1 FROM tracked_marks WHERE telegram_id = ? LIMIT 1) AS has_marks,
+                   (SELECT baseline_pending FROM users WHERE telegram_id = ?) AS pending""",
+            (telegram_id, telegram_id),
         )
-        return row is not None
+        if row is None or row["has_marks"] is None:
+            return False
+        return not row["pending"]
+
+    async def mark_baseline_pending(self, telegram_id: int, pending: bool = True) -> None:
+        """Пометить, что состояние нужно пересобрать молча."""
+        await self._db.execute(
+            "UPDATE users SET baseline_pending = ? WHERE telegram_id = ?",
+            (int(pending), telegram_id),
+        )
+
+    async def is_baseline_pending(self, telegram_id: int) -> bool:
+        row = await self._db.fetch_one(
+            "SELECT baseline_pending FROM users WHERE telegram_id = ?", (telegram_id,)
+        )
+        return bool(row["baseline_pending"]) if row else False
 
     async def replace_marks(self, telegram_id: int, tracked: dict[str, TrackedMark]) -> None:
         """Заменить состояние целиком, одной транзакцией."""
@@ -365,6 +385,17 @@ class MiniappRepository:
             (token, telegram_id),
         )
         return token
+
+    async def import_token(self, token: str, telegram_id: int) -> None:
+        """Записать готовый токен — для переноса из старого проекта.
+
+        Обычный выпуск токена генерирует новый: если бы перенос делал так же,
+        у людей перестали бы открываться уже сохранённые ссылки на PWA.
+        """
+        await self._db.execute(
+            "INSERT OR IGNORE INTO miniapp_tokens (token, telegram_id) VALUES (?,?)",
+            (token, telegram_id),
+        )
 
     async def resolve_token(self, token: str) -> int | None:
         if not token:

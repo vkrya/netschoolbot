@@ -127,6 +127,9 @@ class UserWatcher:
         # Состояние сохраняется до отправки: если Telegram сейчас недоступен,
         # повторный запуск не пришлёт те же оценки ещё раз.
         await self._state.replace_marks(user.telegram_id, result.tracked)
+        if first_run:
+            # Молчаливый проход завершён — дальше уведомления работают обычно.
+            await self._state.mark_baseline_pending(user.telegram_id, False)
 
         known_homework = await self._state.load_homework(user.telegram_id)
         fresh_homework, all_homework = diff_homework(
